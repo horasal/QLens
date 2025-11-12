@@ -67,6 +67,9 @@ cd frontend_clean
 deno Install
 deno task build
 cd ..
+
+# before building, download [maple-font or any font](https://github.com/subframe7536/maple-font/releases)
+# MapleMono-NF-CN-Regular.ttf under `src/tools`
 cargo build --release
 ```
 
