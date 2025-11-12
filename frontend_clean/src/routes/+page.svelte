@@ -132,7 +132,7 @@
 		}
 	}
 
-	async function startNewChat() {
+	async function startNewChat(): Promise<ChatEntry | null> {
 		isLoading = true;
 		try {
 			const res = await fetch('/api/chat/new', { method: 'POST' });
@@ -150,11 +150,14 @@
 
 			currentChat = newChat;
 			goto('?id=' + newChat.id, { replaceState: true });
+			isLoading = false;
+			return newChat;
 		} catch (err) {
 			console.error('Failed to start new chat:', err);
 			showErrorToast(err.message);
+			isLoading = false;
+			return null;
 		}
-		isLoading = false;
 	}
 	function appendTextDelta(contentArray: MessageContent[], delta: string) {
 		if (contentArray.length > 0 && 'Text' in contentArray[contentArray.length - 1]) {
@@ -369,12 +372,19 @@
 	}
 
 	async function sendMessage() {
-		if (
-			processingChatIds.has(currentChat.id) ||
-			!currentChat ||
-			(textInput.trim() === '' && previewFiles.length === 0)
-		) {
+		if (currentChat && processingChatIds.has(currentChat.id)) {
 			return;
+		}
+		if (textInput.trim() === '' && previewFiles.length === 0) {
+			return;
+		}
+
+		if (!currentChat) {
+			const newChat = await startNewChat();
+			if (!newChat) {
+				showErrorToast('Failed to send chat data, please try again.');
+				return;
+			}
 		}
 
 		processingChatIds.add(currentChat.id);
@@ -700,7 +710,7 @@
 										<details class="collapse-arrow collapse mt-2 bg-base-300/50 text-xs">
 											<summary class="collapse-title min-h-0 py-2 font-medium">
 												{#if message.tool_use.length > 0}
-												{$_('tool_use')}
+													{$_('tool_use')}
 												{:else}
 													<span class="flex items-center">
 														<span class="loading mr-2 loading-xs loading-spinner"></span>
@@ -844,7 +854,7 @@
 						class="textarea-bordered textarea flex-1"
 						placeholder={$_('input_placeholder')}
 						rows="1"
-						disabled={!currentChat || processingChatIds.has(currentChat.id)}
+						disabled={currentChat && processingChatIds.has(currentChat.id)}
 						on:keydown={(e) => {
 							if (e.key === 'Enter' && !e.shiftKey) {
 								e.preventDefault();
@@ -856,14 +866,13 @@
 					<button
 						class="btn shrink-0 btn-primary"
 						on:click={sendMessage}
-						disabled={!currentChat ||
-							processingChatIds.has(currentChat.id) ||
+						disabled={(currentChat && processingChatIds.has(currentChat.id)) ||
 							(textInput.trim() === '' && previewFiles.length === 0)}
 					>
 						{#if currentChat && processingChatIds.has(currentChat.id)}
 							<span class="loading loading-spinner"></span>
 						{:else}
-    						{$_('send')}
+							{$_('send')}
 						{/if}
 					</button>
 				</div>

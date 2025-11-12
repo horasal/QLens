@@ -1,5 +1,9 @@
 use std::{
-    default, io::Read, net::{IpAddr, Ipv4Addr, SocketAddr}, str::FromStr, sync::Arc
+    default,
+    io::{Cursor, Read},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    str::FromStr,
+    sync::Arc,
 };
 
 use anyhow::Result;
@@ -23,6 +27,7 @@ use futures::{
     SinkExt, StreamExt,
     stream::{AbortHandle, Abortable},
 };
+use image::ImageFormat;
 use serde::{Deserialize, Serialize};
 use tower_http::{
     compression::CompressionLayer,
@@ -98,12 +103,16 @@ struct Arguments {
     )]
     parallel_function_call: bool,
 
-    #[clap(long, default_value="zoom_in,image_memo,draw_bbox")]
+    #[clap(long, default_value = "zoom_in,image_memo,draw_bbox")]
     tools: String,
     #[clap(long, value_enum, default_value_t = PromptLanguage::English)]
     system_prompt_language: PromptLanguage,
 
-    #[clap(long, help = "Dump current config values to json and exit" ,default_value_t = false)]
+    #[clap(
+        long,
+        help = "Dump current config values to json and exit",
+        default_value_t = false
+    )]
     #[serde(skip)]
     dump_config: bool,
 }
@@ -171,7 +180,8 @@ fn initialize_provider(arg: &Arguments) -> Result<LLMProvider<OpenAIConfig>> {
     let history_db = db.open_tree("history")?;
     tracing::info!("DB started.");
     let toolset = arg
-        .tools.split(',')
+        .tools
+        .split(',')
         .filter_map(|v| {
             let t = get_tool(v.trim(), image_db.clone());
             if t.is_none() {
@@ -520,6 +530,20 @@ async fn download_image(
     }
 }
 
+pub fn convert_to_png(input_data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
+    let format = image::guess_format(&input_data)?;
+    match format {
+        ImageFormat::Jpeg | ImageFormat::Png => Ok(input_data),
+        _ => {
+            let img = image::load_from_memory(&input_data)?;
+            let mut png_data = Vec::new();
+            let mut cursor = Cursor::new(&mut png_data);
+            img.write_to(&mut cursor, ImageFormat::Png)?;
+            Ok(png_data)
+        }
+    }
+}
+
 async fn upload_image(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
     let mut responses = Vec::new();
     loop {
@@ -540,7 +564,13 @@ async fn upload_image(State(state): State<Arc<AppState>>, mut multipart: Multipa
                         return (StatusCode::BAD_REQUEST, error_msg).into_response();
                     }
                 };
-
+                let data = match convert_to_png(data.to_vec()) {
+                    Ok(png_bytes) => png_bytes.to_vec(),
+                    Err(e) => {
+                        tracing::warn!("Failed to convert image to PNG: {}, keeping original", e);
+                        data.to_vec()
+                    }
+                };
                 let uuid = match state.llm.save_image(&data) {
                     Ok(uuid) => uuid,
                     Err(e) => {

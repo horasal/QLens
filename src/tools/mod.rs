@@ -2,7 +2,7 @@ use crate::schema::*;
 use anyhow::Error;
 use std::collections::HashMap;
 
-const FONT_DATA: &'static [u8] = include_bytes!("MapleMono-NF-CN-Regular.ttf");
+const FONT_DATA: &'static [u8] = include_bytes!("../../font.ttf");
 
 mod prompt_template;
 

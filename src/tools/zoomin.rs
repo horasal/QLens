@@ -15,18 +15,16 @@ use serde::Deserialize;
 
 #[derive(Deserialize, JsonSchema)]
 struct ZoomArgs {
-    /// The bounding box of the region to zoom in, as [x1, y1, x2, y2],
-    /// where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right corner
     #[schemars(
-        description = "The bounding box [x1, y1, x2, y2]...",
+        description = "The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right cornerrelative coordinates.",
         length(equal = 4)
     )]
     bbox_2d: [f64; 4],
 
-    #[schemars(description = "The name or label of the object...")]
+    #[schemars(description = "The name or label of the object in the specified bounding box")]
     label: String,
 
-    #[schemars(description = "The uuid of input image...")]
+    #[schemars(description = "The uuid of input image")]
     img_idx: String, // 使用更具体的数字类型
 }
 
@@ -280,7 +278,7 @@ pub fn image_zoom_in(image_data: &[u8], bbox: BBox) -> Result<Vec<u8>, ImageErro
     let (new_h, new_w) = resizer.smart_resize(crop_height, crop_width);
 
     //    Python 的 `Image.BICUBIC` 对应于 `image::imageops::FilterType::CatmullRom`
-    let resized_image = cropped_image.resize_exact(new_w, new_h, imageops::FilterType::CatmullRom);
+    let resized_image = cropped_image.resize_exact(new_w, new_h, imageops::FilterType::Lanczos3);
 
     let mut output_buffer: Vec<u8> = Vec::new();
     let mut cursor = Cursor::new(&mut output_buffer);

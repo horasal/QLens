@@ -14,21 +14,21 @@ use uuid::Uuid;
 
 #[derive(Deserialize, JsonSchema)]
 struct BboxDrawArgs {
-    #[schemars(description = "the list of bounding box...")]
+    #[schemars(description = "list of bounding boxes with their labels to be drawn.")]
     bboxes: Vec<Bbox>,
 
-    #[schemars(description = "The uuid of the image to be drawn...")]
+    #[schemars(description = "The uuid of the image to be drawn on")]
     img_idx: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct Bbox {
     #[schemars(
-        description = "The bounding box [x1, y1, x2, y2]...",
+        description = "The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right cornerrelative coordinates.",
         length(equal = 4)
     )]
     bbox_2d: [f64; 4],
-    #[schemars(description = "The name or label of the object...")]
+    #[schemars(description = "The optional name or label of the object.")]
     label: Option<String>,
 }
 
