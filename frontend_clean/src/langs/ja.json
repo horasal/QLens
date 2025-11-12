@@ -1,0 +1,16 @@
+{
+  "drag_zone": "ここにファイルをドラッグ＆ドロップ",
+  "input_placeholder": "メッセージを入力... (画像のドラッグ＆ドロップ対応)",
+  "scroll_message": "最下部へスクロール",
+  "tool_use": "ツール実行",
+  "tool_result": "ツールの実行結果",
+  "generating_tools": "ツール呼び出しを生成中...",
+  "show_thinking": "思考プロセスを表示...",
+  "folded_user_text": " 行、クリックして展開",
+  "new_window": "左側の会話を選択するか、新しいチャットを開始してください",
+  "no_title": "無題",
+  "new_chat": "新しいチャット",
+  "regenerate": "ここから再生成",
+  "delete_chat": "チャットを削除",
+  "send": "送信"
+}

@@ -1,0 +1,106 @@
+# .github/workflows/release.yml
+
+name: Release Binary
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  BIN_NAME: "server"
+  APP_NAME: "qlens"
+
+# 权限：允许 workflow 创建 Release 并上传 assets
+permissions:
+  contents: write
+
+jobs:
+  # 构建 SvelteKit 前端
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+
+      - name: 安装依赖
+        run: deno install
+
+      - name: 构建 SvelteKit 静态站点
+        run: deno task build
+
+      - name: 上传前端artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-build
+          path: build/
+
+  # 构建 Rust 后端
+  build-backend:
+    needs: build-frontend
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_ext: ""
+            asset_name: "${{ env.APP_NAME }}-linux-amd64"
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_ext: ".exe"
+            asset_name: "${{ env.APP_NAME }}-windows-amd64.exe"
+
+          - os: macos-latest # (可选: 适用于 Apple Silicon M1/M2/M3)
+            target: aarch64-apple-darwin
+            bin_ext: ""
+            asset_name: "${{ env.APP_NAME }}-macos-arm64"
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载已构建的 "ui" 文件夹
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-build
+          path: frontend_clean/build
+
+      - name: 设置 Rust (带缓存)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 构建 Rust 二进制文件
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name:  上传二进制文件作为 artifact (为发布做准备)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: target/${{ matrix.target }}/release/${{ env.BIN_NAME }}${{ matrix.bin_ext }}
+
+  # 创建 GitHub Release 并上传所有二进制文件
+  publish-release:
+    needs: build-backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载所有已编译的二进制文件
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: (调试) 显示 dist 目录结构
+        run: ls -R dist
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*/*

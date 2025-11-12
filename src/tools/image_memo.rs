@@ -1,0 +1,137 @@
+use anyhow::anyhow;
+use image::{self, Rgba, RgbaImage};
+use resvg::tiny_skia;
+use resvg::usvg;
+use schemars::JsonSchema;
+use schemars::schema_for;
+use serde::Deserialize;
+use uuid::Uuid;
+use std::str::FromStr;
+use std::sync::Arc;
+
+use crate::MessageContent;
+use crate::Tool;
+use crate::ToolDescription;
+use crate::tools::FONT_DATA;
+
+// 定义默认的画布大小
+const DEFAULT_WIDTH: u32 = 2048;
+const DEFAULT_HEIGHT: u32 = 2048;
+
+#[derive(Deserialize, JsonSchema)]
+struct ImageMemoArgs {
+    #[schemars(
+        description = "SVG string, canvas size must be 2048x2048...",
+    )]
+    svg: String,
+
+    #[schemars(description = "The uuid of the canvas image, this can be null to retrive an empty 2048x2048 canvas...")]
+    img_idx: Option<String>,
+
+    #[schemars(description = "Optional label of the object...")]
+    label: Option<String>,
+}
+
+pub struct ImageMemoTool {
+    db: sled::Tree,
+}
+
+impl ImageMemoTool {
+    pub fn new(ctx: sled::Tree) -> Self {
+        Self { db: ctx }
+    }
+}
+
+impl Tool for ImageMemoTool {
+    fn name(&self) -> String {
+        "image_memo".to_string()
+    }
+
+    fn description(&self) -> ToolDescription {
+        ToolDescription {
+            name_for_model: "image_memo".to_string(),
+            name_for_human: "图像笔记工具(svg memo taking)".to_string(),
+            description_for_model: "Render and save memos from svg string to an image canvas.".to_string(),
+            parameters: serde_json::to_value(schema_for!(ImageMemoArgs)).unwrap(),
+            args_format: "输入格式必须是JSON，其中图片必须用其UUID指代。".to_string(),
+        }
+    }
+    fn call(&self, args: &str) -> Result<MessageContent, anyhow::Error> {
+        let args: ImageMemoArgs = serde_json::from_str(args)?;
+        let img = if let Some(ref img_idx) = args.img_idx {
+            let id = Uuid::from_str(img_idx)?;
+            let image = self.db.get(id)?.ok_or(anyhow!("Empty Image"))?;
+            render_svg(Some(&image), &args.svg)?
+        } else {
+            render_svg(None, &args.svg)?
+        };
+        let mut uuid = Uuid::new_v4();
+        for _ in 0..10 {
+            match self
+                .db
+                .compare_and_swap(uuid, None::<&[u8]>, Some(img.clone()))?
+            {
+                Ok(()) => break,
+                Err(_) => {
+                    uuid = Uuid::new_v4();
+                }
+            }
+        }
+        Ok(MessageContent::ImageRef(uuid, args.label.unwrap_or("".to_string())))
+    }
+}
+
+/**
+ * 将 SVG 字符串渲染（混合）到现有的 PNG 画布上。
+ *
+ * @param canvas - 一个 `Option<&[u8]>`，包含现有 PNG 文件的原始字节。
+ * 如果为 `None`，将创建一个新的 2048x2048 透明画布。
+ * @param svg - 要在画布上渲染的 SVG 数据的字符串切片。
+ * @returns - 一个 `Result<Vec<u8>, Box<dyn Error>>`，
+ * 如果成功，`Ok` 变体中包含新的 PNG 字节。
+ */
+fn render_svg(canvas: Option<&[u8]>, svg_data: &str) -> Result<Vec<u8>, anyhow::Error> {
+    let mut base_image: RgbaImage = match canvas {
+        Some(png_data) => {
+            // 如果提供了画布，则从内存中加载 PNG
+            image::load_from_memory_with_format(png_data, image::ImageFormat::Png)?.to_rgba8()
+        }
+        None => {
+            // 如果未提供画布，则创建一个新的透明画布
+            RgbaImage::from_pixel(DEFAULT_WIDTH, DEFAULT_HEIGHT, Rgba([0, 0, 0, 0]))
+        }
+    };
+
+    let (width, height) = base_image.dimensions();
+
+    // resvg 需要一个字体数据库来正确渲染 SVG 中的 <text> 元素。
+    let mut font_db = usvg::fontdb::Database::new();
+    font_db.load_font_data(FONT_DATA.to_vec());
+
+    let usvg_options = usvg::Options {
+        fontdb: Arc::new(font_db),
+        font_family: "MapleMono-NF-CN-Regular".into(),
+        ..Default::default()
+    };
+
+    let usvg_tree = usvg::Tree::from_str(svg_data, &usvg_options)?;
+
+    let mut svg_pixmap = tiny_skia::Pixmap::new(width, height)
+        .ok_or(anyhow!("无法创建 tiny_skia::Pixmap"))?;
+    svg_pixmap.fill(tiny_skia::Color::TRANSPARENT);
+    resvg::render(
+        &usvg_tree,
+        tiny_skia::Transform::default(),
+        &mut svg_pixmap.as_mut(),
+    );
+
+    let svg_image_layer = RgbaImage::from_raw(width, height, svg_pixmap.data().to_vec())
+        .ok_or(anyhow!("无法从 SVG pixmap 转换到 RgbaImage"))?;
+
+    image::imageops::overlay(&mut base_image, &svg_image_layer, 0, 0);
+
+    let mut output_buf = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut output_buf);
+    base_image.write_to(&mut cursor, image::ImageFormat::Png)?;
+    Ok(output_buf)
+}

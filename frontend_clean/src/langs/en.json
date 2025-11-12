@@ -1,0 +1,17 @@
+
+{
+  "drag_zone": "Drag files here to upload",
+  "input_placeholder": "Type a message... (Drag & Drop images supported)",
+  "scroll_message": "Scroll to bottom",
+  "tool_use": "Tools",
+  "tool_result": "Tool Execution Result",
+  "generating_tools": "Generating tool calls...",
+  "show_thinking": "Show thinking process...",
+  "folded_user_text": " lines, click to expand",
+  "new_window": "Select a chat from the sidebar, or start a new one.",
+  "no_title": "No Title",
+  "new_chat": "New Chat",
+  "regenerate": "Regenerate from here",
+  "delete_chat": "Delete Chat",
+  "send": "Send"
+}

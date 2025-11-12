@@ -1,0 +1,16 @@
+{
+  "drag_zone": "파일을 여기로 드래그하여 업로드",
+  "input_placeholder": "메시지를 입력하세요... (이미지 드래그 앤 드롭 지원)",
+  "scroll_message": "맨 아래로 스크롤",
+  "tool_use": "도구 실행",
+  "tool_result": "도구 실행 결과",
+  "generating_tools": "도구 호출 생성 중...",
+  "show_thinking": "생각 과정 보기...",
+  "folded_user_text": " 행, 클릭하여 펼치기",
+  "new_window": "왼쪽에서 대화를 선택하거나 새 채팅을 시작하세요",
+  "no_title": "제목 없음",
+  "new_chat": "새 채팅",
+  "regenerate": "여기서 다시 생성",
+  "delete_chat": "채팅 삭제",
+  "send": "전송"
+}
