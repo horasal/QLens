@@ -9,7 +9,7 @@ QLens allows LLMs to actively observe images using tools (Tools). Models can "fe
 
 ---
 
-## ✨ 核心特性 (Features)
+## ✨ Features
 
 - **👁️ Think-with-Images**: Supports models to call tools during reasoning, enabling true visual CoT
 
