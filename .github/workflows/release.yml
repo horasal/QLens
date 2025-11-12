@@ -81,8 +81,8 @@ jobs:
         shell: bash
         run: |
           curl -L -o font.zip https://github.com/subframe7536/maple-font/releases/download/v7.6/MapleMonoNormalNL-NF.zip
-          unzip -j -o font.zip "**/MapleMono-NF-CN-Regular.ttf" -d .
-          mv MapleMono-NF-CN-Regular.ttf font.ttf
+          unzip -j -o font.zip "**/MapleMonoNormalNL-NF-Regular.ttf" -d .
+          mv MapleMonoNormalNL-NF-Regular.ttf font.ttf
           rm font.zip
 
       - name: 构建 Rust 二进制文件
