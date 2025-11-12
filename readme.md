@@ -5,7 +5,6 @@
 QLens is an interactive frontend designed specifically for local multimodal (Qwen3-VL series) large language models.
 QLens allows LLMs to actively observe images using tools (Tools). Models can "feel unclear" and proactively zoom in on specific areas of the image or draw bounding boxes (BBox) on the image to aid in reasoning.
 
-![DemoVideo](assets/Demo.mp4
 <video src="assets/Demo.mp4" controls muted></video>
 
 ---
