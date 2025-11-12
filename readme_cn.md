@@ -3,7 +3,7 @@
 QLens 是一个专为本地多模态（Qwen3-VL 系列）设计的交互式前端。
 QLens 允许 LLM 使用**工具（Tools）**来主动观察图片。模型可以"觉得看不清"而主动放大图片的某个区域，或者在图片上绘制边界框（BBox）来辅助思考。
 
-![DemoVideo](assets/Demo.mp4)
+[![Alt text](assets/demo.jpg)](assets/Demo.mp4)
 
 ---
 
@@ -11,7 +11,7 @@ QLens 允许 LLM 使用**工具（Tools）**来主动观察图片。模型可以
 
 - **👁️ 视觉思维链 (Think-with-Images)**: 支持模型在推理过程中调用工具，实现真正的视觉 CoT
 
-![Demo](assets/demo.jpeg)
+![Demo](assets/demo.jpg)
 
 - **🔍 内置视觉工具**:
   - `Zoom In`: 模型自主裁剪并放大图片特定区域以查看细节
