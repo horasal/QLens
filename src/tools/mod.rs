@@ -15,6 +15,9 @@ pub use bbox::BboxDrawTool;
 mod image_memo;
 pub use image_memo::ImageMemoTool;
 
+mod code_interpreter;
+pub use code_interpreter::CodeInterpreter;
+
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
 pub fn get_tool<T: AsRef<str>>(value: T, db: sled::Tree) -> Option<ToolTrait> {
@@ -22,6 +25,7 @@ pub fn get_tool<T: AsRef<str>>(value: T, db: sled::Tree) -> Option<ToolTrait> {
         "zoom_in" => Some(Box::new(ZoomInTool::new(db))),
         "image_memo" => Some(Box::new(ImageMemoTool::new(db))),
         "draw_bbox" => Some(Box::new(BboxDrawTool::new(db))),
+        "code_interpreter" => Some(Box::new(CodeInterpreter::new(db))),
         _ => None,
     }
 }

@@ -15,6 +15,6 @@
   "seed": null,
   "max_completion_tokens": null,
   "parallel_function_call": false,
-  "tools": "zoom_in,image_memo,draw_bbox",
+  "tools": "zoom_in,draw_bbox,code_interpreter",
   "system_prompt_language": "Chinese"
 }

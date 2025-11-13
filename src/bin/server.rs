@@ -103,7 +103,7 @@ struct Arguments {
     )]
     parallel_function_call: bool,
 
-    #[clap(long, default_value = "zoom_in,image_memo,draw_bbox")]
+    #[clap(long, default_value = "zoom_in,image_memo,code_interpreter")]
     tools: String,
     #[clap(long, value_enum, default_value_t = PromptLanguage::English)]
     system_prompt_language: PromptLanguage,
