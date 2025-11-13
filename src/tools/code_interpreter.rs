@@ -33,7 +33,7 @@ Result will be the value of last expression and all other outputs will be droppe
 A special function `retrieve_image(string)` is available to get an image by uuid and return its binary.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(CodeInterpreterArgs)).unwrap(),
-            args_format: "输入格式必须是有效的Python代码。".to_string(),
+            args_format: "输入格式必须是有效的JSON格式。".to_string(),
         }
     }
     fn call(&self, args: &str) -> Result<MessageContent, anyhow::Error> {
