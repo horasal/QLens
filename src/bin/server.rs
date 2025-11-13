@@ -1,5 +1,4 @@
 use std::{
-    default,
     io::{Cursor, Read},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str::FromStr,
@@ -7,7 +6,7 @@ use std::{
 };
 
 use anyhow::Result;
-use async_openai::{Client, config::OpenAIConfig, types::responses::Prompt};
+use async_openai::{Client, config::OpenAIConfig};
 use axum::{
     Json, Router,
     extract::{
@@ -103,7 +102,7 @@ struct Arguments {
     )]
     parallel_function_call: bool,
 
-    #[clap(long, default_value = "zoom_in,image_memo,code_interpreter")]
+    #[clap(long, default_value = "zoom_in,image_memo,js_interpreter")]
     tools: String,
     #[clap(long, value_enum, default_value_t = PromptLanguage::English)]
     system_prompt_language: PromptLanguage,

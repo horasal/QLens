@@ -2,7 +2,7 @@ use crate::schema::MessageContent;
 use crate::tools::{FONT_DATA, Tool, ToolDescription};
 use ab_glyph::PxScale;
 use anyhow::Result;
-use image::{GenericImageView, Pixel, Rgb, RgbImage, Rgba, RgbaImage};
+use image::{GenericImageView, Pixel, Rgba, RgbaImage};
 use imageproc::drawing::{draw_hollow_rect_mut, draw_text_mut, text_size};
 use imageproc::rect::Rect;
 use schemars::{JsonSchema, schema_for};

@@ -16,7 +16,7 @@ mod image_memo;
 pub use image_memo::ImageMemoTool;
 
 mod code_interpreter;
-pub use code_interpreter::CodeInterpreter;
+pub use code_interpreter::JsInterpreter;
 
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
@@ -25,7 +25,7 @@ pub fn get_tool<T: AsRef<str>>(value: T, db: sled::Tree) -> Option<ToolTrait> {
         "zoom_in" => Some(Box::new(ZoomInTool::new(db))),
         "image_memo" => Some(Box::new(ImageMemoTool::new(db))),
         "draw_bbox" => Some(Box::new(BboxDrawTool::new(db))),
-        "code_interpreter" => Some(Box::new(CodeInterpreter::new(db))),
+        "js_interpreter" => Some(Box::new(JsInterpreter::new(db))),
         _ => None,
     }
 }
@@ -66,7 +66,7 @@ pub struct ToolSet {
 impl std::fmt::Display for ToolSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
-        for k in self.tools.keys(){
+        for k in self.tools.keys() {
             write!(f, "{},", k)?;
         }
         write!(f, "]")
@@ -162,7 +162,9 @@ impl ToolSet {
             .join(",");
 
         let templates = prompt_template::get_templates(lang);
-        let tool_info = templates.tool_info_template.replace("{tool_descs}", &tool_descs);
+        let tool_info = templates
+            .tool_info_template
+            .replace("{tool_descs}", &tool_descs);
 
         let tool_fmt_string = if parallel_function_calls {
             templates.parallel_call_template
@@ -170,11 +172,11 @@ impl ToolSet {
             templates.single_call_template
         };
         let tool_fmt = tool_fmt_string
-                    .replace("{tool_names}", &tool_names)
-                    .replace("{FN_NAME}", FN_NAME)
-                    .replace("{FN_ARGS}", FN_ARGS)
-                    .replace("{FN_RESULT}", FN_RESULT)
-                    .replace("{FN_EXIT}", FN_EXIT);
+            .replace("{tool_names}", &tool_names)
+            .replace("{FN_NAME}", FN_NAME)
+            .replace("{FN_ARGS}", FN_ARGS)
+            .replace("{FN_RESULT}", FN_RESULT)
+            .replace("{FN_EXIT}", FN_EXIT);
 
         format!("{}\n\n{}", tool_info, tool_fmt)
     }

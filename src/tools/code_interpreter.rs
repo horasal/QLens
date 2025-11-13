@@ -1,167 +1,216 @@
-use std::{
-    str::FromStr,
-    sync::{Arc, Mutex},
-};
-
-use anyhow::{Error, anyhow};
-use rustpython_vm::{PyResult, Settings, VirtualMachine, compiler::Mode, scope::Scope, vm};
+use crate::{MessageContent, Tool, ToolDescription};
+use base64::{Engine, prelude::BASE64_STANDARD};
+use deno_error::JsError;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::{MessageContent, Tool, ToolDescription};
+use std::borrow::Cow;
+use std::{sync::mpsc};
+use std::thread;
+
+use anyhow::{Error, anyhow};
+use deno_core::{Extension, JsRuntime, Op, OpState, RuntimeOptions, extension, op2, scope, v8};
 
 #[derive(Deserialize, JsonSchema)]
-pub struct CodeInterpreterArgs {
-    #[schemars(description = r##"The python code"##)]
+pub struct JsInterpreterArgs {
+    #[schemars(description = r##"Javascript code"##)]
     code: String,
 }
 
-pub struct CodeInterpreter {
-    db: sled::Tree,
-}
-
-impl Tool for CodeInterpreter {
+impl Tool for JsInterpreter {
     fn name(&self) -> String {
-        "python_interpreter".to_string()
+        "js_interpreter".to_string()
     }
 
     fn description(&self) -> ToolDescription {
         ToolDescription {
-            name_for_model: "python_interpreter".to_string(),
-            name_for_human: "Python代码执行工具".to_string(),
+            name_for_model: "js_interpreter".to_string(),
+            name_for_human: "Javascript代码执行工具".to_string(),
             description_for_model:
-r##"Python code sandbox, which can be used to execute Python code.
+r##"Javascript code sandbox, which can be used to execute Javascript code.
+The environment is pure V8 with Standard Built-in Objects(Math, JSON, etc.); not Node.js or Browser.
 Last expression, stdout and stderr will be returned.
-A special function `retrieve_image(string)` is available to get an image by uuid and return its binary.
+Pre-loaded Global Libraries (all libraries are already imported, any call ot 'require' will cause error):
+* lodash.min.js (Mustache): Utility library.
+* decimal.min.js (Decimal): arbitrary-precision Decimal
+* math.min.js (math): Advanced math.
+* papaparse.min.js (Papa): CSV parser/generator.
+* dayjs.min.js (dayjs): Date manipulation.
+* A special function `retrieve_image(string)`: get an image by its uuid and return base64-encoded binary.
 "##.to_string(),
-            parameters: serde_json::to_value(schema_for!(CodeInterpreterArgs)).unwrap(),
-            args_format: "输入格式必须是有效的JSON，其中code储存原始python代码。".to_string(),
+            parameters: serde_json::to_value(schema_for!(JsInterpreterArgs)).unwrap(),
+            args_format: "输入格式必须是有效的JSON，其中code储Javascript代码。".to_string(),
         }
     }
     fn call(&self, args: &str) -> Result<MessageContent, anyhow::Error> {
-        let args: CodeInterpreterArgs = serde_json::from_str(args)?;
+        let args: JsInterpreterArgs = serde_json::from_str(args)?;
         let ret = self.run_code(&args.code)?;
         Ok(MessageContent::Text(serde_json::to_string(&ret)?))
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct CodeResult {
     last_expression: String,
-    stdout: String,
-    stderr: String,
+    terminal: String,
 }
 
-const SETUP_CODE: &str = r#"
-import sys
+struct LogSender(mpsc::Sender<String>);
+struct DbHandle(sled::Tree);
 
-class RustOutput:
-    def __init__(self, is_stderr=False):
-        self.is_stderr = is_stderr
+#[op2(fast)]
+fn console_op_print(state: &mut OpState, #[string] msg: String, is_err: bool) {
+    if let Some(sender) = state.try_borrow::<LogSender>() {
+        let prefix = if is_err { "[stderr] " } else { "" };
+        let _ = sender.0.send(format!("{}{}", prefix, msg));
+    }
+}
 
-    def write(self, s):
-        if self.is_stderr:
-            _rust_stderr_write(s)
-        else:
-            _rust_stdout_write(s)
+#[derive(Debug, thiserror::Error, JsError)]
+#[class(generic)]
+enum ImageError {
+    #[error("image binary is empty")]
+    ImageEmpty,
+    #[error("Invalid UUID {0}")]
+    InvalidUuid(#[from] uuid::Error),
+    #[error("Database error {0}")]
+    DatabaseError(#[from] sled::Error),
+}
 
-    def flush(self):
-        pass
+#[op2]
+#[string]
+fn op_retrieve_image(
+    state: &mut OpState,
+    #[string] uuid_str: String,
+) -> Result<String, ImageError> {
+    let db = state.borrow::<DbHandle>();
+    let uuid = uuid::Uuid::parse_str(&uuid_str).map_err(|e| ImageError::InvalidUuid(e))?;
+    match db.0.get(uuid) {
+        Ok(Some(bytes)) => Ok(BASE64_STANDARD.encode(bytes)),
+        Ok(None) => Err(ImageError::ImageEmpty),
+        Err(e) => Err(ImageError::DatabaseError(e)),
+    }
+}
 
-sys.stdout = RustOutput(is_stderr=False)
-sys.stderr = RustOutput(is_stderr=True)
-"#;
+extension!(sandbox_ext, ops = [console_op_print, op_retrieve_image],);
 
-impl CodeInterpreter {
+pub struct JsInterpreter {
+    db: sled::Tree,
+}
+const LOAD_SOURCE: &[(&str, &str)] = &[
+    ("lodash", include_str!("prelude/lodash.min.js")),
+    ("math", include_str!("prelude/math.min.js")),
+    ("decimal", include_str!("prelude/decimal.min.js")),
+    ("mustache", include_str!("prelude/mustache.min.js")),
+    ("papaparse", include_str!("prelude/papaparse.min.js")),
+    ("dayjs", include_str!("prelude/dayjs.min.js")),
+];
+
+impl JsInterpreter {
     pub fn new(db: sled::Tree) -> Self {
         Self { db }
     }
 
     fn run_code(&self, code: &str) -> Result<CodeResult, Error> {
-        let mut setting = Settings::default();
-        setting.isolated = true;
-        setting.allow_external_library = false;
-
-        let stdout_buffer = Arc::new(Mutex::new(String::new()));
-        let stderr_buffer = Arc::new(Mutex::new(String::new()));
-
-        let vm = vm::Interpreter::with_init(setting, move |vm| {
-            vm.add_native_modules(rustpython_vm::stdlib::get_module_inits());
-        });
-
         let db = self.db.clone();
-        let retrieve_image = move |s: String, vm: &VirtualMachine| -> PyResult<Vec<u8>> {
-            match db.get(Uuid::from_str(&s).map_err(|e| {
-                vm.new_system_error(format!("Unable to convert parameter to uuid: {}", e))
-            })?) {
-                Ok(Some(s)) => Ok(s.to_vec()),
-                Ok(None) => Err(vm.new_system_error(format!("image {} retrieved but is empty", s))),
+        let code = code.to_string();
+        let builder = thread::Builder::new().stack_size(16 * 1024 * 1024);
+        let thread_handle = builder.spawn(move || {
+            let (tx, rx) = mpsc::channel::<String>();
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| anyhow!("Failed to build runtime: {}", e))?;
+
+            let execution_result: Result<String, anyhow::Error> = rt.block_on(async {
+                let mut js_runtime = JsRuntime::new(RuntimeOptions {
+                    extensions: vec![sandbox_ext::init()],
+                    ..Default::default()
+                });
+
+                {
+                    let state = js_runtime.op_state();
+                    let mut state = state.borrow_mut();
+                    state.put(LogSender(tx.clone()));
+                    state.put(DbHandle(db));
+                }
+
+                let setup_script = r#"
+                globalThis.console = {
+                    log: (...args) => {
+                        let msg = args.map(String).join(" ");
+                        Deno.core.ops.console_op_print(msg + "\n", false);
+                    },
+                    error: (...args) => {
+                        let msg = args.map(String).join(" ");
+                        Deno.core.ops.console_op_print("stderr: " + msg + "\n", true);
+                    }
+                };
+
+                globalThis.retrieve_image = (uuid) => {
+                    return Deno.core.ops.op_retrieve_image(uuid);
+                };
+            "#;
+
+                if !LOAD_SOURCE.is_empty() {
+                    for (name, source) in LOAD_SOURCE {
+                        js_runtime.execute_script(*name, *source)?;
+                    }
+                }
+
+                js_runtime.execute_script("<setup>", setup_script)?;
+                let result = js_runtime.execute_script("<user_code>", code);
+
+                if let Ok(_) = result {
+                    let _ = js_runtime.run_event_loop(Default::default()).await;
+                }
+
+                match result {
+                    Ok(global) => {
+                        scope!(scope, js_runtime);
+                        let value = v8::Local::new(scope, global);
+                        Ok(value.to_rust_string_lossy(scope))
+                    }
+                    Err(e) => Err(anyhow!("Runtime Error: {}", e)),
+                }
+            });
+
+            drop(tx);
+
+            let logs: String = rx.into_iter().collect();
+            let mut ret = String::new();
+            match execution_result {
+                Ok(res) => {
+                    if !res.is_empty() && res != "undefined" {
+                        ret.push_str(&res);
+                    }
+                }
                 Err(e) => {
-                    Err(vm.new_system_error(format!("Unable to get image with uuid {}: {}", s, e)))
+                    ret.push_str(&e.to_string());
                 }
             }
-        };
 
-        let stdout_buffer_clone = stdout_buffer.clone();
-        let write_stdout = move |s: String| {
-            let mut buf = stdout_buffer_clone.lock().unwrap();
-            buf.push_str(&s);
-        };
-
-        let stderr_buffer_clone = stderr_buffer.clone();
-        let write_stderr = move |s: String| {
-            let mut buf = stderr_buffer_clone.lock().unwrap();
-            buf.push_str(&s);
-        };
-        vm.enter(|vm| {
-            let scope = vm.new_scope_with_builtins();
-            scope
-                .globals
-                .set_item(
-                    "retrieve_image",
-                    vm.new_function("retrieve_image", retrieve_image).into(),
-                    &vm,
-                )
-                .map_err(|_| anyhow!("Unable to set global function `retrieve_image`"))?;
-            scope
-                .globals
-                .set_item(
-                    "_rust_stdout_write",
-                    vm.new_function("_rust_stdout_write", write_stdout).into(),
-                    &vm,
-                )
-                .map_err(|_| anyhow!("Unable to set internal function `_rust_stdout_write`"))?;
-
-            scope
-                .globals
-                .set_item(
-                    "_rust_stderr_write",
-                    vm.new_function("_rust_stderr_write", write_stderr).into(),
-                    &vm,
-                )
-                .map_err(|_| anyhow!("Unable to set internal function `_rust_stderr_write`"))?;
-            vm.run_code_string(scope.clone(), SETUP_CODE, "".to_string())
-                .map_err(|_| anyhow!("Unable to setup stdout/stderr mapping."))?;
-            let last_expression = vm
-                .compile(code, Mode::Single, "".to_string())
-                .map_err(|e| vm.new_syntax_error(&e, Some(code)))
-                .and_then(|c| vm.run_code_obj(c, scope))
-                .and_then(|res| res.str(vm).map(|s| s.to_string()))
-                .map_err(|e| {
-                    let mut s = String::new();
-                    vm.write_exception(&mut s, &e)
-                        .map(|_| anyhow!(s))
-                        .unwrap_or(anyhow!("Unable to write exception to string"))
-                })?;
-
-            let stdout = stdout_buffer.lock().unwrap().clone();
-            let stderr = stderr_buffer.lock().unwrap().clone();
             Ok(CodeResult {
-                last_expression,
-                stdout,
-                stderr,
+                last_expression: ret,
+                terminal: logs,
             })
-        })
+        });
+
+        // 等待线程结束
+        match thread_handle?.join() {
+            Ok(result) => result,
+            Err(_) => Err(anyhow!("JsInterpreter thread panicked")),
+        }
     }
+}
+
+#[test]
+fn test_js_run() {
+    let db = sled::Config::new()
+        .temporary(true)
+        .open().unwrap();
+    let ci = JsInterpreter::new(db.open_tree("a").unwrap());
+    let output = ci.run_code("console.log(\"test\");").unwrap();
+    println!("{:?}", output);
 }
