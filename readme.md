@@ -27,6 +27,8 @@ QLens allows LLMs to actively observe images using tools (Tools). Models can "fe
 - **llama.cpp**: Specifically designed for llama.cpp's server mode, ready to use out-of-the-box
 - **Frontend**: Real-time rendering of Markdown, LaTeX formulas, and code highlighting while smoothly displaying tool invocation during streaming
 
+![code_run](assets/code_run.jpg)
+
 ---
 
 ## 🛠️ Prerequisites

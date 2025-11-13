@@ -24,6 +24,8 @@ QLens 允许 LLM 使用**工具（Tools）**来主动观察图片。模型可以
 - **兼容 llama.cpp**: 专为 llama.cpp 的 server 模式设计，开箱即用
 - **流式体验**: 实时渲染 Markdown、LaTeX 公式，支持代码高亮，且能在流式传输中平滑展示工具调用过程
 
+![code_run](assets/code_run.jpg)
+
 ---
 
 ## 🛠️ 准备工作 (Prerequisites)
