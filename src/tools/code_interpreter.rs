@@ -27,15 +27,16 @@ impl Tool for JsInterpreter {
             name_for_model: "js_interpreter".to_string(),
             name_for_human: "Javascript代码执行工具".to_string(),
             description_for_model:
-r##"Javascript code sandbox, which can be used to execute Javascript code.
+r##"Javascript code interpreter, can be used as a REPL(Read-Eval-Print Loop).
 The environment is pure V8 with Standard Built-in Objects(Math, JSON, etc.); not Node.js or Browser.
 Last expression, stdout and stderr will be returned.
 Pre-loaded Global Libraries (all libraries are already imported, any call ot 'require' will cause error):
 * lodash.min.js (Mustache): Utility library.
-* decimal.min.js (Decimal): arbitrary-precision Decimal
 * math.min.js (math): Advanced math.
+* decimal.min.js (Decimal): arbitrary-precision Decimal type
 * papaparse.min.js (Papa): CSV parser/generator.
 * dayjs.min.js (dayjs): Date manipulation.
+* js-base64.min.js (Base64): Date manipulation.
 * A special function `retrieve_image(string)`: get an image by its uuid and return base64-encoded binary.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(JsInterpreterArgs)).unwrap(),
@@ -100,10 +101,11 @@ pub struct JsInterpreter {
 const LOAD_SOURCE: &[(&str, &str)] = &[
     ("lodash", include_str!("prelude/lodash.min.js")),
     ("math", include_str!("prelude/math.min.js")),
-    ("decimal", include_str!("prelude/decimal.min.js")),
     ("mustache", include_str!("prelude/mustache.min.js")),
     ("papaparse", include_str!("prelude/papaparse.min.js")),
     ("dayjs", include_str!("prelude/dayjs.min.js")),
+    ("base64", include_str!("prelude/base64.min.js")),
+    ("decimal", include_str!("prelude/decimal.min.js")),
 ];
 
 impl JsInterpreter {
