@@ -10,6 +10,8 @@ Code Interpreter           |  Fetch Image from web
 ![](assets/code_run.jpg)   |  ![](assets/fetch.jpg)
 Zoom-in                    |  Think-with-Image
 ![](assets/zoom_in.jpg)    |  ![](assets/think_with_image.jpg)
+Chain Call                 |  
+![](assets/chain_call.jpg) |  
 
 ---
 
