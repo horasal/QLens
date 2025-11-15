@@ -38,7 +38,7 @@ Chain Call                 |
 Before using QLens, you need to run a backend compatible with OpenAI API. I recommend using [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
 1. Download the [Qwen3-VL](https://huggingface.co/collections/Qwen/qwen3-vl)  GGUF Model
-2. Start llama.cpp server：(Recommended thinking series for better tool performance)
+2. Start llama.cpp server：
 
 ```bash
 ./llama-server \
