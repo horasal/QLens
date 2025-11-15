@@ -7,7 +7,7 @@ QLens 允许 LLM 使用**工具（Tools）**来主动观察图片。模型可以
 
 Code Interpreter             |  Fetch Image from web
 :-------------------------:|:-------------------------:
-![](assets/code_run.png)  |  ![](assets/fetch.png)
+![](assets/code_run.jpg)  |  ![](assets/fetch.jpg)
 
 ---
 

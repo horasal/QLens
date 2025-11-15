@@ -9,7 +9,7 @@ QLens allows LLMs to actively observe images using tools (Tools). Models can "fe
 
 Code Interpreter             |  Fetch Image from web
 :-------------------------:|:-------------------------:
-![](assets/code_run.png)  |  ![](assets/fetch.png)
+![](assets/code_run.jpg)  |  ![](assets/fetch.jpg)
 
 ---
 
