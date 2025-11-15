@@ -518,7 +518,13 @@ async fn download_image(
         Ok(Some(ivec)) => {
             let bytes: Vec<u8> = ivec.to_vec();
             let mut headers = HeaderMap::new();
-            headers.insert(CONTENT_TYPE, "image/jpeg".parse().unwrap());
+            headers.insert(
+                CONTENT_TYPE,
+                guess_content_type(&bytes)
+                    .unwrap_or("image/jpeg")
+                    .parse()
+                    .unwrap(),
+            );
             (headers, bytes).into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND, "Image not found").into_response(),
@@ -529,7 +535,12 @@ async fn download_image(
     }
 }
 
-pub fn convert_to_png(input_data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
+fn guess_content_type(input_data: &[u8]) -> Result<&str, anyhow::Error> {
+    let format = image::guess_format(&input_data)?;
+    Ok(format.to_mime_type())
+}
+
+fn convert_to_png(input_data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
     let format = image::guess_format(&input_data)?;
     match format {
         ImageFormat::Jpeg | ImageFormat::Png => Ok(input_data),

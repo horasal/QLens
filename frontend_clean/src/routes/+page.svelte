@@ -87,6 +87,10 @@
 	let chatContainer: HTMLElement;
 	let mainContentArea: HTMLElement;
 
+	let reconnectInterval = 1000;
+	let maxReconnectInterval = 30000;
+	let wsReconnecting = false;
+
 	function showErrorToast(message: string, duration_ms = 5000) {
 		errorMessage = message;
 
@@ -217,68 +221,115 @@
 		return messages; // 返回修改后的数组
 	}
 
-	onMount(async () => {
-		await loadHistorySidebar();
+	function connectWebSocket() {
+		if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
-		// 动态构建 WebSocket URL
 		const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 		const wsUrl = `${wsProtocol}//${window.location.host}/api/chat`;
 
 		console.log('Connecting to WebSocket at:', wsUrl);
 		ws = new WebSocket(wsUrl);
 
-		ws.onopen = () => console.log('WebSocket connected');
-		ws.onclose = () => console.log('WebSocket disconnected');
+		ws.onopen = () => {
+			console.log('WebSocket connected');
+			wsReconnecting = false;
+			reconnectInterval = 1000;
+			if (currentChat) loadChat(currentChat.id);
+		};
 
-		ws.onmessage = (event) => {
-			const packet = JSON.parse(event.data);
-
-			const packetChatId = packet.chat_id;
-			if (!packetChatId) {
-				console.error('Received packet without chat_id:', packet);
-				return;
-			}
-
-			if (packet.StreamEnd) {
-				console.log(`StreamEnd received for: ${packetChatId}`);
-
-				processingChatIds.delete(packetChatId);
-				processingChatIds = processingChatIds; // 强制响应式
-
-				wipDeltaStore.delete(packetChatId);
-
-				if (packetChatId === currentChat?.id) {
-					console.log(`Reloading current chat ${currentChat.id} from database...`);
-					loadChat(currentChat.id);
-				} else {
-					console.log(`Reloading sidebar, background chat ${packetChatId} finished.`);
-					loadHistorySidebar();
-				}
-				return;
-			}
-
-			if (processingChatIds.has(packetChatId)) {
-				if (!wipDeltaStore.has(packetChatId)) {
-					wipDeltaStore.set(packetChatId, []);
-				}
-				wipDeltaStore.get(packetChatId).push(packet);
-			}
-			if (packetChatId === currentChat?.id) {
-				currentChat.messages = applyPacketToMessages(currentChat.messages, packet);
-				currentChat = currentChat; // 强制响应式
-
-				scrollToBottom();
-			} else if (processingChatIds.has(packetChatId)) {
-				console.log(`Stored packet for background chat: ${packetChatId}`);
-			} else {
-				console.log(`Ignoring packet for background chat: ${packetChatId}`);
+		ws.onclose = (e) => {
+			console.log('WebSocket disconnected', e);
+			if (!wsReconnecting) {
+				scheduleReconnect();
 			}
 		};
+
+		ws.onerror = (err) => {
+			console.error('WebSocket error', err);
+			ws.close(); // 触发 onclose 进行重连
+		};
+
+		ws.onmessage = handleWsMessage;
+	}
+
+	function scheduleReconnect() {
+		wsReconnecting = true;
+		showErrorToast(`Attempting reconnect in ${reconnectInterval}ms...`);
+		setTimeout(() => {
+			connectWebSocket();
+			reconnectInterval = Math.min(reconnectInterval * 1.5, maxReconnectInterval);
+		}, reconnectInterval);
+	}
+
+	function handleWsMessage(event: MessageEvent) {
+		const packet = JSON.parse(event.data);
+
+		const packetChatId = packet.chat_id;
+		if (!packetChatId) {
+			console.error('Received packet without chat_id:', packet);
+			return;
+		}
+
+		if (packet.StreamEnd) {
+			console.log(`StreamEnd received for: ${packetChatId}`);
+
+			processingChatIds.delete(packetChatId);
+			processingChatIds = processingChatIds; // 强制响应式
+
+			wipDeltaStore.delete(packetChatId);
+
+			if (packetChatId === currentChat?.id) {
+				console.log(`Reloading current chat ${currentChat.id} from database...`);
+				loadChat(currentChat.id);
+			} else {
+				console.log(`Reloading sidebar, background chat ${packetChatId} finished.`);
+				loadHistorySidebar();
+			}
+			return;
+		}
+
+		if (processingChatIds.has(packetChatId)) {
+			if (!wipDeltaStore.has(packetChatId)) {
+				wipDeltaStore.set(packetChatId, []);
+			}
+			wipDeltaStore.get(packetChatId).push(packet);
+		}
+		if (packetChatId === currentChat?.id) {
+			currentChat.messages = applyPacketToMessages(currentChat.messages, packet);
+			currentChat = currentChat; // 强制响应式
+
+			scrollToBottom();
+		} else if (processingChatIds.has(packetChatId)) {
+			console.log(`Stored packet for background chat: ${packetChatId}`);
+		} else {
+			console.log(`Ignoring packet for background chat: ${packetChatId}`);
+		}
+	}
+
+	onMount(async () => {
+		await loadHistorySidebar();
+		connectWebSocket();
+
 		const urlId = $page.url.searchParams.get('id');
 		if (urlId) {
 			await loadChat(urlId);
 		}
 	});
+
+	async function waitForConnection(timeout = 5000): Promise<boolean> {
+		if (ws.readyState === WebSocket.OPEN) return true;
+
+		showErrorToast('Websocket not ready, connecting...');
+
+		connectWebSocket();
+
+		const start = Date.now();
+		while (ws.readyState !== WebSocket.OPEN) {
+			if (Date.now() - start > timeout) return false;
+			await new Promise((r) => setTimeout(r, 100));
+		}
+		return true;
+	}
 
 	async function loadHistorySidebar() {
 		try {
@@ -442,6 +493,13 @@
 			content: fullUserContent
 		};
 
+		const connected = await waitForConnection();
+		if (!connected) {
+			showErrorToast('Connection lost. Please check your network.');
+			processingChatIds.delete(currentChat.id);
+			processingChatIds = processingChatIds;
+			return;
+		}
 		ws.send(JSON.stringify(wsMessage));
 
 		textInput = '';
