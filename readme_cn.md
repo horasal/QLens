@@ -3,19 +3,22 @@
 QLens 是一个专为本地多模态（Qwen3-VL 系列）设计的交互式前端。
 QLens 允许 LLM 使用**工具（Tools）**来主动观察图片。模型可以"觉得看不清"而主动放大图片的某个区域，或者在图片上绘制边界框（BBox）来辅助思考。
 
-![](https://github.com/horasal/QLens/raw/refs/heads/main/assets/Demo.mp4)
+![Think with images](assets/demo.jpg)
+
+Code Interpreter             |  Fetch Image from web
+:-------------------------:|:-------------------------:
+![](assets/code_run.png)  |  ![](assets/fetch.png)
 
 ---
 
 ## ✨ 核心特性 (Features)
 
 - **👁️ 视觉思维链 (Think-with-Images)**: 支持模型在推理过程中调用工具，实现真正的视觉 CoT
-
-![Demo](assets/demo.jpg)
-
 - **🔍 内置视觉工具**:
   - `Zoom In`: 模型自主裁剪并放大图片特定区域以查看细节
   - `Draw BBox`: 在图片上绘制边界框进行标记或计数
+  - `Code Interpreter`: 执行Javascript代码，还能用d3画图
+  - `Fetch URL`: 下载分析HTML以及图片
   - `Image Memo`: 允许用SVG记笔记
 - **⚡ 本地优先**:
   - 后端采用 Rust (Axum) 编写，极速响应，内存占用低
@@ -23,8 +26,6 @@ QLens 允许 LLM 使用**工具（Tools）**来主动观察图片。模型可以
   - 采用嵌入式数据库（Sled），所有聊天记录存储在本地
 - **兼容 llama.cpp**: 专为 llama.cpp 的 server 模式设计，开箱即用
 - **流式体验**: 实时渲染 Markdown、LaTeX 公式，支持代码高亮，且能在流式传输中平滑展示工具调用过程
-
-![code_run](assets/code_run.jpg)
 
 ---
 

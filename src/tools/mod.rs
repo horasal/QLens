@@ -2,7 +2,6 @@ use crate::schema::*;
 use anyhow::Error;
 use std::collections::HashMap;
 
-const FONT_DATA: &'static [u8] = include_bytes!("../../font.ttf");
 
 mod prompt_template;
 
@@ -18,6 +17,12 @@ pub use image_memo::ImageMemoTool;
 mod code_interpreter;
 pub use code_interpreter::JsInterpreter;
 
+mod fetch;
+pub use fetch::FetchTool;
+
+mod utils;
+pub use utils::*;
+
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
 pub fn get_tool<T: AsRef<str>>(value: T, db: sled::Tree) -> Option<ToolTrait> {
@@ -26,6 +31,7 @@ pub fn get_tool<T: AsRef<str>>(value: T, db: sled::Tree) -> Option<ToolTrait> {
         "image_memo" => Some(Box::new(ImageMemoTool::new(db))),
         "draw_bbox" => Some(Box::new(BboxDrawTool::new(db))),
         "js_interpreter" => Some(Box::new(JsInterpreter::new(db))),
+        "fetch" => Some(Box::new(FetchTool::new(db))),
         _ => None,
     }
 }

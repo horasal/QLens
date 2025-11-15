@@ -20,7 +20,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
 ## 你拥有如下工具：
 {tool_descs}"###,
             parallel_call_template:
-"## 你可以在回复中插入以下命令以并行调用N个工具：\n\n\
+"## 你可以在回复中插入以下命令以并行调用N个工具\
+工具调用可以分成一轮或者多轮进行，\
+回复结束后你会获得工具的回应：\n\
 {FN_NAME}: 工具1的名称，必须是[{tool_names}]之一\n\
 {FN_ARGS}: 工具1的输入\n\
 {FN_NAME}: 工具2的名称\n\
@@ -36,7 +38,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
 ## 在收到工具返回后：\n\
 {FN_EXIT} 根据工具结果进行进一步处理或回复，可以使用`![描述](/api/image/{{uuid}})`来引用图片\n",
             single_call_template:
-"## 你可以在回复中插入零次、一次或多次以下命令以调用工具，回复结束后你会获得工具的回应：\n\
+"## 你可以在回复中插入零次、一次或多次以下命令以调用工具，\
+工具调用可以分成一轮或者多轮进行，\
+回复结束后你会获得工具的回应：\n\
 {FN_NAME}: 工具名称，必须是[{tool_names}]之一。\n\
 {FN_ARGS}: 工具输入\n\n\
 ## 工具会返回以下结果(**你不需要在调用时输出{FN_RESULT}和{FN_EXIT}，未来你有机会组织语言**)\n\
@@ -53,7 +57,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
 ## 以下のツールが利用可能です：
 {tool_descs}"###,
             parallel_call_template:
-"## 応答に以下のコマンドを挿入することで、N個のツールを並行して呼び出すことができます：\n\n\
+"## 応答に以下のコマンドを挿入することで、\
+ツールの利用は複数ターンに分けることも可能で、\
+N個のツールを並行して呼び出すことができます：\n\n\
 {FN_NAME}: ツール1の名前、[{tool_names}]のいずれかである必要があります\n\
 {FN_ARGS}: ツール1への入力\n\
 {FN_NAME}: ツール2の名前\n\
@@ -69,7 +75,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
 ## ツールの結果を受け取った後：\n\
 {FN_EXIT} ツールの結果に基づいて応答してください。`![説明](/api/image/{{uuid}})` を使用して画像を参照できます。\n",
             single_call_template:
-"## 応答に以下のコマンドを0回、1回、または複数回挿入することでツールを呼び出せます。応答が完了した後、ツールの応答を受け取ります：\n\
+"## 応答に以下のコマンドを0回、1回、または複数回挿入することでツールを呼び出せます。\
+ツールの利用は複数ターンに分けることも可能で、\
+応答が完了した後、ツールの応答を受け取ります：\n\
 {FN_NAME}: ツール名、[{tool_names}]のいずれかである必要があります。\n\
 {FN_ARGS}: ツールへの入力\n\n\
 ## ツールは以下の結果を返します（**呼び出し時に{FN_RESULT}や{FN_EXIT}を出力する必要はありません。後で応答を構成する機会があります**）\n\

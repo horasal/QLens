@@ -6,6 +6,7 @@ use std::str::FromStr;
 use uuid::Uuid;
 
 use crate::schema::MessageContent;
+use crate::tools::utils::save_image_to_db;
 use crate::tools::{Tool, ToolDescription};
 use anyhow::{Error, anyhow};
 use schemars::{JsonSchema, schema_for};
@@ -63,18 +64,7 @@ impl Tool for ZoomInTool {
             y2: args.bbox_2d[3],
         };
         let cropped_img = image_zoom_in(&image, bbox)?;
-        let mut uuid = Uuid::new_v4();
-        for _ in 0..10 {
-            match self
-                .db
-                .compare_and_swap(uuid, None::<&[u8]>, Some(cropped_img.clone()))?
-            {
-                Ok(()) => break,
-                Err(_) => {
-                    uuid = Uuid::new_v4();
-                }
-            }
-        }
+        let uuid = save_image_to_db(&self.db, &cropped_img)?;
         Ok(MessageContent::ImageRef(uuid, args.label))
     }
 }

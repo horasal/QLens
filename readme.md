@@ -5,20 +5,23 @@
 QLens is an interactive frontend designed specifically for local multimodal (Qwen3-VL series) large language models.
 QLens allows LLMs to actively observe images using tools (Tools). Models can "feel unclear" and proactively zoom in on specific areas of the image or draw bounding boxes (BBox) on the image to aid in reasoning.
 
-<div><video controls src="https://github.com/horasal/QLens/raw/refs/heads/main/assets/Demo.mp4" muted="true"></video></div>
+![Think with images](assets/demo.jpg)
+
+Code Interpreter             |  Fetch Image from web
+:-------------------------:|:-------------------------:
+![](assets/code_run.png)  |  ![](assets/fetch.png)
 
 ---
 
 ## ✨ Features
 
 - **👁️ Think-with-Images**: Supports models to call tools during reasoning, enabling true visual CoT
-
-![Demo](assets/demo.jpg)
-
 - **🔍 Built-in Visual Tools:**
 
   - `Zoom In`: Models autonomously crop and zoom into specific regions of images to view details
   - `Draw BBox`: Drawing bounding boxes on images for labeling or counting
+  - `Code Interpreter`: Run javascript to render graph with D3.js!
+  - `Fetch URL`: Download and analysis html and images.
   - `Image Memo`: Allows note-taking with SVG
 - **⚡ Local-First**:
   - Backend implemented in Rust (Axum) for ultra-fast response and low memory usage
@@ -26,8 +29,6 @@ QLens allows LLMs to actively observe images using tools (Tools). Models can "fe
   - Embedded database (Sled) storing all chat history locally
 - **llama.cpp**: Specifically designed for llama.cpp's server mode, ready to use out-of-the-box
 - **Frontend**: Real-time rendering of Markdown, LaTeX formulas, and code highlighting while smoothly displaying tool invocation during streaming
-
-![code_run](assets/code_run.jpg)
 
 ---
 

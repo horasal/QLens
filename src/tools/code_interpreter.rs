@@ -1,7 +1,6 @@
 use crate::{MessageContent, Tool, ToolDescription, tools::FONT_DATA};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use deno_error::JsError;
-use image::{Rgba, RgbaImage};
 use resvg::{tiny_skia, usvg};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -34,6 +33,7 @@ r##"Javascript code interpreter, can be used as a REPL(Read-Eval-Print Loop).
 **Environment:**
 A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
 * **DOM Supported:** `window`, `document`, `HTMLElement`, `SVGElement`, and `XMLSerializer` are available. You can create and manipulate DOM elements just like in a browser.
+* **Sandboxed:** network (like `fetch`) and io are disabled.
 * **Syntax:** Supports ES6+ syntax. **Top-level `await` is allowed**.
 * **Return Value** `return` `stdout` `stderr` will be returned as tool results.
 * **No Layout Engine:** Note that while DOM is supported, layout calculation (e.g., `getBoundingClientRect`, `getComputedStyle`) is mocked and may not return accurate pixel values.

@@ -823,11 +823,16 @@
 													{/if}
 												{/each}
 											</div>
-
 											{#each message.content as item}
 												{#if 'Text' in item}
-													<div class="prose max-w-none">
-														{@html renderMarkdown(item.Text)}
+													<div class="card mt-2 border border-base-300 bg-base-200 shadow-inner">
+														<div class="card-body p-3">
+															<div
+																class="max-h-80 overflow-y-auto rounded bg-base-100 p-3 font-mono text-xs break-words whitespace-pre-wrap opacity-80"
+															>
+																{item.Text}
+															</div>
+														</div>
 													</div>
 												{/if}
 											{/each}
