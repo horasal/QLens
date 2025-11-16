@@ -1,6 +1,6 @@
 use crate::schema::*;
 use anyhow::Error;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 use std::collections::HashMap;
 
@@ -27,7 +27,7 @@ pub use utils::*;
 
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Display, EnumIter, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Display, EnumIter, Serialize, Deserialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum ToolKind {
     #[strum(serialize = "zoom_in")]

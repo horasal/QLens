@@ -15,6 +15,11 @@
   "seed": null,
   "max_completion_tokens": null,
   "parallel_function_call": false,
-  "tools": "zoom_in,draw_bbox,js_interpreter,curl",
+  "tools": [
+    "ZoomIn",
+    "ImageMemo",
+    "DrawBbox",
+    "JsInterpreter",
+    "Curl"],
   "system_prompt_language": "Chinese"
 }
