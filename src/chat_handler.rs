@@ -327,7 +327,9 @@ impl<T: Config> LLMProvider<T> {
                                                 assistant_tool_calls.push(tool_use);
 
                                                 current_tool_name.clear();
-                                                yield ChatEvent::ToolDelta(tag.to_string());
+                                                if tag != FN_EXIT {
+                                                    yield ChatEvent::ToolDelta(tag.to_string());
+                                                }
 
                                                 if tag == FN_NAME {
                                                     state = StreamParseState::ToolCallName;

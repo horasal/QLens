@@ -103,8 +103,8 @@ struct Arguments {
 
     #[clap(
         long,
-        default_value = "zoom_in,js_interpreter,draw_bbox,fetch",
-        help = "Tools can be used by Qwen, available: zoom_in, js_interpreter, image_memo, draw_bbox, fetch"
+        default_value = "zoom_in,js_interpreter,draw_bbox,curl",
+        help = "Tools can be used by Qwen, available: zoom_in, js_interpreter, image_memo, draw_bbox, curl"
     )]
     tools: String,
     #[clap(long, value_enum, default_value_t = PromptLanguage::English)]

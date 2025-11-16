@@ -26,8 +26,12 @@ struct FetchArgs {
     )]
     keep_script: Option<bool>,
 
-    #[schemars(description = "JSON string content for POST requests. Ignored for GET requests.")]
-    content: Option<String>,
+    #[schemars(description = "string content for POST requests. Ignored for GET requests.")]
+    post_content: Option<String>,
+    #[schemars(
+        description = "ContentType for `post_content`. Default to `application/json` and ignored for GET requests."
+    )]
+    post_content_type: Option<String>,
 
     #[schemars(description = "Optional label for this request")]
     label: Option<String>,
@@ -49,8 +53,8 @@ impl FetchTool {
         Self { db: ctx,
             client: reqwest::blocking::Client::builder()
                 .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(40))
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new()),
         }
@@ -59,18 +63,18 @@ impl FetchTool {
 
 impl Tool for FetchTool {
     fn name(&self) -> String {
-        "fetch_url".to_string()
+        "curl_url".to_string()
     }
 
     fn description(&self) -> ToolDescription {
         ToolDescription {
-            name_for_model: "fetch_url".to_string(),
-            name_for_human: "网页抓取工具(url fetch tool)".to_string(),
+            name_for_model: "curl_url".to_string(),
+            name_for_human: "网页抓取工具(curl_url_tool)".to_string(),
             description_for_model:
 "Access and retrieve content from a specific URL.
 * Allow to fetch image binary and any text-base content.
-* If content is an image, the content of this image and its actual uuid will be returned; the image format may be converted for rendering purpose.
-* If content is HTML, it will be automatically converted to Markdown for reading or processing further.
+* If remote content is an image, the content of this image and its actual uuid will be returned; the image format may be converted for rendering purpose.
+* If remote content is HTML, it will be automatically converted to Markdown and all links are preserved as remote url.
 * Other text-based content will be returned as-is.".to_string(),
             parameters: serde_json::to_value(schema_for!(FetchArgs)).unwrap(),
             args_format: "输入格式必须是JSON。".to_string(),
@@ -84,10 +88,14 @@ impl Tool for FetchTool {
             FetchMethod::Post => self.client.post(&args.url),
         };
 
-        if let Some(content) = args.content {
+        if let Some(content) = args.post_content {
             if matches!(args.method, Some(FetchMethod::Post)) {
                 req_builder = req_builder
-                    .header(CONTENT_TYPE, "application/json")
+                    .header(
+                        CONTENT_TYPE,
+                        args.post_content_type
+                            .unwrap_or("application/json".to_string()),
+                    )
                     .body(content);
             }
         }
@@ -146,7 +154,10 @@ impl Tool for FetchTool {
                     let bytes = res.bytes()?.to_vec();
                     save_image_to_db(&self.db, &super::convert_to_png(bytes)?)?
                 };
-                Ok(MessageContent::ImageRef(uuid, args.label.unwrap_or(args.url)))
+                Ok(MessageContent::ImageRef(
+                    uuid,
+                    args.label.unwrap_or(args.url),
+                ))
             }
 
             _ => {

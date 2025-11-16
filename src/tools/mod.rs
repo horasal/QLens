@@ -31,7 +31,7 @@ pub fn get_tool<T: AsRef<str>>(value: T, db: sled::Tree) -> Option<ToolTrait> {
         "image_memo" => Some(Box::new(ImageMemoTool::new(db))),
         "draw_bbox" => Some(Box::new(BboxDrawTool::new(db))),
         "js_interpreter" => Some(Box::new(JsInterpreter::new(db))),
-        "fetch" => Some(Box::new(FetchTool::new(db))),
+        "curl" => Some(Box::new(FetchTool::new(db))),
         _ => None,
     }
 }
