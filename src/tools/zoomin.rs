@@ -50,13 +50,13 @@ impl Tool for ZoomInTool {
             name_for_human: "图像局部裁切/放大工具(image crop and zoom-in tool)".to_string(),
             description_for_model: "Crop and zoom in on a specific region of an image by cropping it based on a bounding box (bbox) and an optional object label".to_string(),
             parameters: serde_json::to_value(schema_for!(ZoomArgs)).unwrap(),
-            args_format: "输入格式必须是JSON，其中图片必须用其UUID指代。".to_string(),
+            args_format: "输入格式必须是JSON，其中图片必须用其对应的UUID指代。".to_string(),
         }
     }
     fn call(&self, args: &str) -> Result<MessageContent, Error> {
         let args: ZoomArgs = serde_json::from_str(args)?;
         let id = Uuid::from_str(&args.img_idx)?;
-        let image = self.db.get(id)?.ok_or(anyhow!("Empty Image"))?;
+        let image = self.db.get(id)?.ok_or(anyhow!("Image does not exist"))?;
         let bbox = BBox {
             x1: args.bbox_2d[0],
             y1: args.bbox_2d[1],

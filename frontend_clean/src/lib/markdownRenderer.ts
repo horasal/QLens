@@ -5,7 +5,7 @@ import hljs from 'highlight.js';
 
 // 1. 初始化 markdown-it
 const md = markdownit({
-  html: true,         // 允许 KaTeX 生成的 HTML
+  html: false,         // 允许 KaTeX 生成的 HTML
   linkify: true,      // 自动转换 URL 为链接
   highlight: (str, lang) => {
           if (lang && hljs.getLanguage(lang)) {

@@ -27,7 +27,7 @@ pub fn save_svg_to_db(db: &sled::Tree, svg_data: &str) -> Result<Uuid, anyhow::E
 
     let usvg_options = usvg::Options {
         fontdb: Arc::new(font_db),
-        font_family: "MapleMono-NF-CN-Regular".into(),
+        font_family: "MapleMonoNormal-NF-CN-Regular".into(),
         ..Default::default()
     };
 

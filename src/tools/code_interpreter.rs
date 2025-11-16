@@ -22,20 +22,18 @@ impl Tool for JsInterpreter {
         "js_interpreter".to_string()
     }
 
-//    * `function retrieve_image(uuid: string): string`: get an image from database by its uuid and return base64-encoded data.
-//    * `function save_image(base64_encoded_image_binary: string): string`: save an png/jpeg image to database and get its uuid.
     fn description(&self) -> ToolDescription {
         ToolDescription {
             name_for_model: "js_interpreter".to_string(),
             name_for_human: "Javascript代码执行工具".to_string(),
             description_for_model:
-r##"Javascript code interpreter, can be used as a REPL(Read-Eval-Print Loop).
+r##"Javascript code interpreter.
 **Environment:**
 A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
 * **DOM Supported:** `window`, `document`, `HTMLElement`, `SVGElement`, and `XMLSerializer` are available. You can create and manipulate DOM elements just like in a browser.
 * **Sandboxed:** network (like `fetch`) and io are disabled.
 * **Syntax:** Supports ES6+ syntax. **Top-level `await` is allowed**.
-* **Return Value** `return` `stdout` `stderr` will be returned as tool results.
+* **Return Value** `return val;` `stdout` `stderr` will be returned as tool results.
 * **No Layout Engine:** Note that while DOM is supported, layout calculation (e.g., `getBoundingClientRect`, `getComputedStyle`) is mocked and may not return accurate pixel values.
 **Pre-loaded Libraries(Do not import/require):**
 * lodash.min.js (Mustache): Utility library.
@@ -46,6 +44,8 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
 * d3.v7.min.js (d3): data visualizing, ALWAYS prefer **SVG** over Canvas and Use D3 selection API exclusively for DOM manipulation.
 * Special functions:
   * `function save_svg(svg: string): string`: save a svg image as png to database and get its uuid.
+  * `function retrieve_image(uuid: string): string`: get an image from database by its uuid and return base64-encoded data.
+  * `function save_image(base64_encoded_image_binary: string): string`: save an png/jpeg image to database and get its uuid.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(JsInterpreterArgs)).unwrap(),
             args_format: "输入格式必须是有效的JSON，其中code储存Javascript代码。".to_string(),

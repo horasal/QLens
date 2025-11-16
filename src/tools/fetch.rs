@@ -69,7 +69,7 @@ impl Tool for FetchTool {
             description_for_model:
 "Access and retrieve content from a specific URL.
 * Allow to fetch image binary and any text-base content.
-* If content is an image, you will get its content and actual uuid; the image format may be converted for rendering purpose.
+* If content is an image, the content of this image and its actual uuid will be returned; the image format may be converted for rendering purpose.
 * If content is HTML, it will be automatically converted to Markdown for reading or processing further.
 * Other text-based content will be returned as-is.".to_string(),
             parameters: serde_json::to_value(schema_for!(FetchArgs)).unwrap(),

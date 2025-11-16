@@ -183,8 +183,10 @@ impl ToolSet {
             .replace("{FN_ARGS}", FN_ARGS)
             .replace("{FN_RESULT}", FN_RESULT)
             .replace("{FN_EXIT}", FN_EXIT);
+        let assistant_prompt = templates.assistant_desc_template
+            .replace("{CURRENT_DATE}", &chrono::Local::now().format("%Y-%m-%d").to_string());
 
-        format!("{}\n\n{}", tool_info, tool_fmt)
+        format!( r##"{}\n{}\n\n{}"##, assistant_prompt, tool_info, tool_fmt)
     }
 }
 
@@ -194,7 +196,7 @@ pub const FN_NAME: &str = "✿FUNCTION✿";
 pub const FN_ARGS: &str = "✿ARGS✿";
 pub const FN_RESULT: &str = "✿RESULT✿";
 pub const FN_EXIT: &str = "✿RETURN✿";
-pub const FN_STOP_WORDS: [&str; 3] = [FN_NAME, FN_RESULT, FN_EXIT];
+pub const FN_STOP_WORDS: [&str; 4] = [FN_NAME, FN_ARGS, FN_RESULT, FN_EXIT];
 
 #[test]
 fn test_builder() {
