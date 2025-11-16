@@ -71,10 +71,10 @@ impl Tool for FetchTool {
             name_for_model: "curl_url".to_string(),
             name_for_human: "网页抓取工具(curl_url_tool)".to_string(),
             description_for_model:
-"Access and retrieve content from a specific URL.
-* Allow to fetch image binary and any text-base content.
-* If remote content is an image, the content of this image and its actual uuid will be returned; the image format may be converted for rendering purpose.
-* If remote content is HTML, it will be automatically converted to Markdown and all links are preserved as remote url.
+"Access and retrieve remote content from a specific URL and save to local database.
+* Allow to fetch image binary and any text-base contents.
+* If remote content is an image, this tool downloads the image into local database and returns it with a local uuid; the image format may be converted for rendering purpose.
+* If remote content is HTML, it will be automatically converted to Markdown and all links are preserved as remote urls.
 * Other text-based content will be returned as-is.".to_string(),
             parameters: serde_json::to_value(schema_for!(FetchArgs)).unwrap(),
             args_format: "输入格式必须是JSON。".to_string(),

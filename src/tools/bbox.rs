@@ -1,8 +1,9 @@
+use crate::ImageResizer;
 use crate::schema::MessageContent;
 use crate::tools::{FONT_DATA, Tool, ToolDescription};
 use ab_glyph::PxScale;
 use anyhow::Result;
-use image::{GenericImageView, Pixel, Rgba, RgbaImage};
+use image::{GenericImageView, Pixel, Rgba, RgbaImage, imageops};
 use imageproc::drawing::{draw_hollow_rect_mut, draw_text_mut, text_size};
 use imageproc::rect::Rect;
 use schemars::{JsonSchema, schema_for};
@@ -17,7 +18,7 @@ struct BboxDrawArgs {
     #[schemars(description = "list of bounding boxes")]
     bboxes: Vec<Bbox>,
 
-    #[schemars(description = "The uuid of the image to be drawn on")]
+    #[schemars(description = "The local uuid of the image to be drawn on")]
     img_idx: String,
 }
 
@@ -109,12 +110,21 @@ fn draw_bboxes_rgba(image_data: &[u8], bboxes: &[Bbox]) -> Result<Vec<u8>, anyho
     let image = image::load_from_memory(image_data)?;
     let (width, height) = image.dimensions();
 
+    let (width, height, image) = if width < 128 || height < 128 {
+        let resizer = ImageResizer::new(8, 262144, 12845056);
+        let (new_w, new_h) = resizer.smart_resize(width, height);
+        let resized_image = image.resize_exact(new_w, new_h, imageops::FilterType::Lanczos3);
+        (new_w, new_h, resized_image)
+    } else {
+        (width, height, image)
+    };
+
     let mut image_buffer: RgbaImage = image.to_rgba8();
 
     let font = ab_glyph::FontRef::try_from_slice(FONT_DATA)?;
 
     let font_size = 40.0;
-    let border_thickness = 4_i32;
+    let border_thickness = 3_i32;
     let text_padding = 4_i32; // 文本在背景矩形内的边距
 
     let mut label_to_color = HashMap::new();

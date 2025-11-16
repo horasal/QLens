@@ -102,11 +102,14 @@ struct Arguments {
     parallel_function_call: bool,
 
     #[clap(
-        long,
-        default_value = "zoom_in,js_interpreter,draw_bbox,curl",
-        help = "Tools can be used by Qwen, available: zoom_in, js_interpreter, image_memo, draw_bbox, curl"
-    )]
-    tools: String,
+            long,
+            value_delimiter = ',',
+            num_args = 1..,
+            default_values_t = vec![ToolKind::ZoomIn, ToolKind::JsInterpreter, ToolKind::DrawBbox, ToolKind::Curl],
+            help = "Tools can be used by Qwen."
+        )]
+    tools: Vec<ToolKind>,
+
     #[clap(long, value_enum, default_value_t = PromptLanguage::English)]
     system_prompt_language: PromptLanguage,
 
@@ -182,15 +185,8 @@ fn initialize_provider(arg: &Arguments) -> Result<LLMProvider<OpenAIConfig>> {
     let history_db = db.open_tree("history")?;
     tracing::info!("DB started.");
     let toolset = arg
-        .tools
-        .split(',')
-        .filter_map(|v| {
-            let t = get_tool(v.trim(), image_db.clone());
-            if t.is_none() {
-                tracing::warn!("Unknown tool {}", v);
-            }
-            t
-        })
+        .tools.iter()
+        .map(|v| { v.create_tool(image_db.clone()) })
         .fold(ToolSet::builder(), |ts, t| ts.add_tool(t))
         .build();
     let llm = LLMProvider::new(client, history_db, image_db, toolset)?;

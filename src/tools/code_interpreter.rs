@@ -43,9 +43,9 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
 * js-base64.min.js (Base64): bas64 encode/decode, alway use this to handle base64.
 * d3.v7.min.js (d3): data visualizing, ALWAYS prefer **SVG** over Canvas and Use D3 selection API exclusively for DOM manipulation.
 * Special functions:
-  * `function save_svg(svg: string): string`: save a svg image as png to database and get its uuid.
-  * `function retrieve_image(uuid: string): string`: get an image from database by its uuid and return base64-encoded data.
-  * `function save_image(base64_encoded_image_binary: string): string`: save a non-svg image to database and get its uuid.
+  * `function save_svg(svg: string): string`: save a svg image as png to database and return its local uuid.
+  * `function retrieve_image(locl_uuid: string): string`: get an image from database by its uuid and return base64-encoded data.
+  * `function save_image(base64_encoded_image_binary: string): string`: save a non-svg image to database and return its local uuid.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(JsInterpreterArgs)).unwrap(),
             args_format: "输入格式必须是有效的JSON，其中code储存Javascript代码。".to_string(),

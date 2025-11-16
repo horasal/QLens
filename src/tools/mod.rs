@@ -1,5 +1,7 @@
 use crate::schema::*;
 use anyhow::Error;
+use serde::Deserialize;
+use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 use std::collections::HashMap;
 
 
@@ -25,14 +27,37 @@ pub use utils::*;
 
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
-pub fn get_tool<T: AsRef<str>>(value: T, db: sled::Tree) -> Option<ToolTrait> {
-    match value.as_ref() {
-        "zoom_in" => Some(Box::new(ZoomInTool::new(db))),
-        "image_memo" => Some(Box::new(ImageMemoTool::new(db))),
-        "draw_bbox" => Some(Box::new(BboxDrawTool::new(db))),
-        "js_interpreter" => Some(Box::new(JsInterpreter::new(db))),
-        "curl" => Some(Box::new(FetchTool::new(db))),
-        _ => None,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Display, EnumIter, Deserialize)]
+#[strum(serialize_all = "snake_case")]
+pub enum ToolKind {
+    #[strum(serialize = "zoom_in")]
+    ZoomIn,
+    #[strum(serialize = "image_memo")]
+    ImageMemo,
+    #[strum(serialize = "draw_bbox")]
+    DrawBbox,
+    #[strum(serialize = "js_interpreter")]
+    JsInterpreter,
+    #[strum(serialize = "curl")]
+    Curl,
+}
+
+impl ToolKind {
+    pub fn create_tool(&self, db: sled::Tree) -> Box<dyn Tool + Send + Sync> {
+        match self {
+            ToolKind::ZoomIn => Box::new(ZoomInTool::new(db)),
+            ToolKind::ImageMemo => Box::new(ImageMemoTool::new(db)),
+            ToolKind::DrawBbox => Box::new(BboxDrawTool::new(db)),
+            ToolKind::JsInterpreter => Box::new(JsInterpreter::new(db)),
+            ToolKind::Curl => Box::new(FetchTool::new(db)),
+        }
+    }
+
+    pub fn default_tools_str() -> String {
+        ToolKind::iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -207,9 +232,15 @@ fn test_builder() {
         .unwrap();
     let zoom_tool = Box::new(ZoomInTool::new(db.open_tree("image").unwrap()));
     let bbox_tool = Box::new(BboxDrawTool::new(db.open_tree("image").unwrap()));
+    let js_tool = Box::new(JsInterpreter::new(db.open_tree("image").unwrap()));
+    let curl_tool = Box::new(FetchTool::new(db.open_tree("image").unwrap()));
+    let mem_tool = Box::new(ImageMemoTool::new(db.open_tree("image").unwrap()));
     let toolset = ToolSet::builder()
         .add_tool(zoom_tool)
         .add_tool(bbox_tool)
+        .add_tool(js_tool)
+        .add_tool(curl_tool)
+        .add_tool(mem_tool)
         .build();
-    println!("{}", toolset.system_prompt(whatlang::Lang::Cmn, true))
+    println!("{}", toolset.system_prompt(whatlang::Lang::Cmn, false))
 }

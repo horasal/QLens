@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::str::FromStr;
 use uuid::Uuid;
 
+use crate::ImageResizer;
 use crate::schema::MessageContent;
 use crate::tools::utils::save_image_to_db;
 use crate::tools::{Tool, ToolDescription};
@@ -18,14 +19,13 @@ use serde::Deserialize;
 struct ZoomArgs {
     #[schemars(
         description = "The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right cornerrelative coordinates.",
-        length(equal = 4)
     )]
     bbox_2d: [f64; 4],
 
     #[schemars(description = "The name or label of the object in the specified bounding box")]
     label: String,
 
-    #[schemars(description = "The uuid of input image")]
+    #[schemars(description = "The local uuid of input image")]
     img_idx: String, // 使用更具体的数字类型
 }
 
@@ -66,74 +66,6 @@ impl Tool for ZoomInTool {
         let cropped_img = image_zoom_in(&image, bbox)?;
         let uuid = save_image_to_db(&self.db, &cropped_img)?;
         Ok(MessageContent::ImageRef(uuid, args.label))
-    }
-}
-
-/// 用于智能调整大小的辅助结构体
-/// 移植自 Python 版本的 `smart_resize` 及其辅助函数
-struct ImageResizer {
-    factor: f64,
-    min_pixels: f64,
-    max_pixels: f64,
-}
-
-impl ImageResizer {
-    /// * `factor`: 缩放因子，通常为 32
-    /// * `min_pixels`: 最小像素总数
-    /// * `max_pixels`: 最大像素总数
-    fn new(factor: u32, min_pixels: u64, max_pixels: u64) -> Self {
-        Self {
-            factor: factor as f64,
-            min_pixels: min_pixels as f64,
-            max_pixels: max_pixels as f64,
-        }
-    }
-
-    /// (helper) `round_by_factor` 的 Rust 实现
-    fn round_by_factor(&self, number: f64) -> f64 {
-        (number / self.factor).round() * self.factor
-    }
-
-    /// (helper) `ceil_by_factor` 的 Rust 实现
-    fn ceil_by_factor(&self, number: f64) -> f64 {
-        (number / self.factor).ceil() * self.factor
-    }
-
-    /// (helper) `floor_by_factor` 的 Rust 实现
-    fn floor_by_factor(&self, number: f64) -> f64 {
-        (number / self.factor).floor() * self.factor
-    }
-
-    /// `smart_resize` 的 Rust 实现
-    ///
-    /// # Arguments
-    ///
-    /// * `height`: 图像高度
-    /// * `width`: 图像宽度
-    ///
-    /// # Returns
-    ///
-    /// * `(u32, u32)`: (新的高度, 新的宽度)
-    fn smart_resize(&self, height: u32, width: u32) -> (u32, u32) {
-        let height_f = height as f64;
-        let width_f = width as f64;
-
-        let mut h_bar = self.factor.max(self.round_by_factor(height_f));
-        let mut w_bar = self.factor.max(self.round_by_factor(width_f));
-
-        let current_pixels = h_bar * w_bar;
-
-        if current_pixels > self.max_pixels {
-            let beta = (height_f * width_f / self.max_pixels).sqrt();
-            h_bar = self.floor_by_factor(height_f / beta);
-            w_bar = self.floor_by_factor(width_f / beta);
-        } else if current_pixels < self.min_pixels {
-            let beta = (self.min_pixels / (height_f * width_f)).sqrt();
-            h_bar = self.ceil_by_factor(height_f * beta);
-            w_bar = self.ceil_by_factor(width_f * beta);
-        }
-
-        (h_bar as u32, w_bar as u32)
     }
 }
 
