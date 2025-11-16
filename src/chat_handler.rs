@@ -294,7 +294,10 @@ impl<T: Config> LLMProvider<T> {
                                                 parse_buffer.drain(..FN_ARGS.len());
 
                                                 current_tool_name =
-                                                    name_part_raw.trim().trim_matches(':').trim().to_string();
+                                                    name_part_raw.trim()
+                                                        .trim_matches(':')
+                                                        .trim_matches('：')
+                                                        .trim().to_string();
 
                                                 let delta = name_part_raw + FN_ARGS;
                                                 assistant_reasoning.push_str(&delta);
@@ -316,7 +319,10 @@ impl<T: Config> LLMProvider<T> {
                                                 parse_buffer.drain(..tag.len());
 
                                                 let args =
-                                                    args_part_raw.trim().trim_matches(':').trim().to_string();
+                                                    args_part_raw.trim()
+                                                        .trim_matches(':')
+                                                        .trim_matches('：')
+                                                        .trim().to_string();
 
                                                 assistant_reasoning.push_str(&args_part_raw);
                                                 yield ChatEvent::ToolDelta(args_part_raw);
@@ -359,7 +365,10 @@ impl<T: Config> LLMProvider<T> {
                     }
                     StreamParseState::ToolCallArgs => {
                         // 这是最后一个工具的参数
-                        let args = parse_buffer.trim().trim_matches(':').trim().to_string();
+                        let args = parse_buffer.trim()
+                            .trim_matches(':')
+                            .trim_matches('：')
+                            .trim().to_string();
                         assistant_reasoning.push_str(&parse_buffer);
                         yield ChatEvent::ToolDelta(parse_buffer);
 
