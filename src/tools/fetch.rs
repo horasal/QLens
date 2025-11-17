@@ -78,7 +78,7 @@ impl Tool for FetchTool {
 * If remote content is HTML, it will be automatically converted to Markdown and all links are preserved as remote urls.
 * Other text-based content will be returned as-is.".to_string(),
             parameters: serde_json::to_value(schema_for!(FetchArgs)).unwrap(),
-            args_format: "YAML或JSON。".to_string(),
+            args_format: "必须是一个YAML或JSON对象".to_string(),
         }
     }
 

@@ -55,7 +55,7 @@ impl Tool for ZoomInTool {
             name_for_human: "图像局部裁切/放大工具(image crop and zoom-in)".to_string(),
             description_for_model: "Crop and zoom in on specific regions of an image by cropping it based on a bounding box (bbox) and an optional object label".to_string(),
             parameters: serde_json::to_value(schema_for!(ZoomArgs)).unwrap(),
-            args_format: "YAML或JSON，其中图片必须用其对应的UUID指代。".to_string(),
+            args_format: "必须是一个YAML或JSON对象，其中图片必须用其对应的UUID指代。".to_string(),
         }
     }
     fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error> {

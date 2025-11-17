@@ -14,9 +14,9 @@ use anyhow::{Error, anyhow};
 use deno_core::{JsRuntime, OpState, RuntimeOptions, extension, op2, scope, v8};
 
 #[derive(Deserialize, JsonSchema)]
-pub struct JsInterpreterArgs {
-    #[schemars(description = r##"Javascript code"##)]
-    pub code: String,
+pub struct JsInterpreterArgs{
+    #[schemars(description = "javascript source code")]
+    pub code: String
 }
 
 impl Tool for JsInterpreter {
@@ -35,7 +35,7 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
 * **DOM Supported:** `window`, `document`, `HTMLElement`, `SVGElement`, and `XMLSerializer` are available. You can create and manipulate DOM elements just like in a browser.
 * **NO Network:** **Network are DISABLED and REMOVED in JS sandbox**.
 * **Syntax:** Supports ES6+ syntax. **Top-level `await` is allowed**.
-* **Return Value** `return val;` `stdout` `stderr` will be returned as tool results.
+* **Return Value** To get a value, MUST use one of `return val;` `stdout` `stderr`.
 * **No Layout Engine:** Note that while DOM is supported, layout calculation (e.g., `getBoundingClientRect`, `getComputedStyle`) is mocked and may not return accurate pixel values.
 **Pre-loaded Libraries(Do not import/require):**
 * lodash.min.js (Mustache): Utility library.
@@ -50,12 +50,12 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
   * `function save_image(base64_encoded_image_binary: string): string`: save a non-svg image to database and return its local uuid.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(JsInterpreterArgs)).unwrap(),
-            args_format: "输入格式必须是YAML(推荐)或JSON，其中code参数储存Javascript代码。".to_string(),
+            args_format: "输入必须是一个YAML或JSON对象".to_string(),
         }
     }
     fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
-        let args: JsInterpreterArgs = parse_sourcecode_args(args)?;
-        let ret = self.run_code(&args.code)?;
+        let code = parse_sourcecode_args(args)?;
+        let ret = self.run_code(&code)?;
         let mut v = vec![MessageContent::Text(serde_json::to_string(&ret)?)];
         for uuid in ret.uuids.into_iter() {
             v.push(MessageContent::ImageRef(uuid, "".to_string()));
@@ -66,7 +66,7 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct CodeResult {
-    last_expression: String,
+    return_value: String,
     terminal: String,
     #[serde(skip)]
     uuids: Vec<Uuid>,
@@ -374,14 +374,14 @@ impl JsInterpreter {
             match execution_result {
                 Ok(res) => {
                     Ok(CodeResult {
-                        last_expression: res,
+                        return_value: res,
                         terminal: logs,
                         uuids: uuids,
                     })
                 }
                 Err(e) => {
                     Ok(CodeResult {
-                        last_expression: e.to_string(),
+                        return_value: e.to_string(),
                         terminal: logs,
                         uuids: uuids,
                     })

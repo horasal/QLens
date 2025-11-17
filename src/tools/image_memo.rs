@@ -117,7 +117,7 @@ The memo persists across tool calls in this session.
 IMPORTANT: Use coordinate format [x1, y1, x2, y2] for all bounding boxes.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(ImageMemoArgs)).unwrap(),
-            args_format: "YAML或JSON".to_string(),
+            args_format: "必须是一个YAML或JSON对象".to_string(),
         }
     }
 

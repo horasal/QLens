@@ -5,7 +5,7 @@ use crate::{
     schema::{Message, MessageContent, Role, ToolUse},
     tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet},
 };
-use anyhow::{Error, anyhow};
+use anyhow::{Error, anyhow, bail};
 use async_openai::types::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
     ChatCompletionRequestAssistantMessageContentPart, ChatCompletionRequestMessageContentPartImage,
@@ -295,6 +295,10 @@ impl<T: Config> LLMProvider<T> {
                                                         .trim_matches('：')
                                                         .trim().to_string();
 
+                                                if current_tool_name.len() == 0 {
+                                                    tracing::warn!("ToolName is empty: {}, current ctx: {}", idx, content);
+                                                }
+
                                                 let delta = name_part_raw + FN_ARGS;
                                                 assistant_reasoning.push_str(&delta);
                                                 yield ChatEvent::ToolDelta(delta);
@@ -328,7 +332,8 @@ impl<T: Config> LLMProvider<T> {
                                                 yield ChatEvent::ToolCall(tool_use.clone());
                                                 assistant_tool_calls.push(tool_use);
 
-                                                current_tool_name.clear();
+                                                //如果有连续的两个args，那就当作对同一个fn name使用2次
+                                                //current_tool_name.clear();
                                                 if tag != FN_EXIT {
                                                     yield ChatEvent::ToolDelta(tag.to_string());
                                                 }

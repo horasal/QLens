@@ -39,14 +39,19 @@ fn strip_markdown_fences(input: &str) -> (bool, &str) {
     (false, input)
 }
 
-pub fn parse_sourcecode_args(input: &str) -> Result<JsInterpreterArgs, anyhow::Error> {
+// 用来支持各种不可思议的LLM输入
+// Qwen会输入如下内容：
+// { "code": ` ... ` }  -> serde-json中对应完毕
+// { "code": ``` ... ```` }  -> serde-json中对应完毕
+// | ....  -> 允许yaml
+// ```javascript ... -> strip_markdown_fences之后输出
+pub fn parse_sourcecode_args(input: &str) -> Result<String, anyhow::Error> {
     let (is_code_block, clean_input) = strip_markdown_fences(input);
     if is_code_block {
-        return Ok(JsInterpreterArgs {
-            code: clean_input.to_string()
-        });
+        Ok(clean_input.to_string())
+    } else {
+        parse_tool_args::<JsInterpreterArgs>(input).map(|s| s.code)
     }
-    parse_tool_args(clean_input)
 }
 
 pub fn parse_tool_args<T: DeserializeOwned>(input: &str) -> Result<T, anyhow::Error> {
