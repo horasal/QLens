@@ -231,10 +231,6 @@ impl<T: Config> LLMProvider<T> {
                                 } else if let Some(content) = thunk.choices.first().and_then(|c| c.delta.content.as_ref())
                                 {
                                     parse_buffer.push_str(content);
-                                } else {
-                                    continue;
-                                }
-
                                 'parse_loop: loop {
                                     match state {
                                         StreamParseState::AwaitingDecision => {
@@ -309,6 +305,7 @@ impl<T: Config> LLMProvider<T> {
                                             }
                                         }
                                         StreamParseState::ToolCallArgs => {
+                                            yield ChatEvent::ToolDelta(content.to_string());
                                             let next_stop = FN_STOP_WORDS
                                                 .iter()
                                                 .filter_map(|tag| parse_buffer.find(tag).map(|idx| (idx, *tag)))
@@ -325,7 +322,6 @@ impl<T: Config> LLMProvider<T> {
                                                         .trim().to_string();
 
                                                 assistant_reasoning.push_str(&args_part_raw);
-                                                yield ChatEvent::ToolDelta(args_part_raw);
 
                                                 let tool_use =
                                                     ToolUse { function_name: current_tool_name.clone(), args };
@@ -348,7 +344,7 @@ impl<T: Config> LLMProvider<T> {
                                             }
                                         }
                                     }
-                                }
+                                }}
                             }
                 match state {
                     StreamParseState::AwaitingDecision | StreamParseState::Content | StreamParseState::ToolCallName=> {
@@ -474,29 +470,29 @@ impl<T: Config> LLMProvider<T> {
         &self,
         v: ChatEntry,
         is_parallel_fc: bool,
-        lang: Option<whatlang::Lang>
+        lang: Option<whatlang::Lang>,
     ) -> Vec<ChatCompletionRequestMessage> {
         let lang = match lang {
             Some(l) => l,
             None => v
-            .messages
-            .iter()
-            .filter(|v| v.owner == Role::User)
-            .map(|v| {
-                v.content
-                    .iter()
-                    .filter_map(|v| match v {
-                        MessageContent::Text(s) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<String>>()
-                    .join("")
-            })
-            .filter(|v| v.len() > 0)
-            .last()
-            .map(|v| whatlang::detect_lang(&v))
-            .flatten()
-            .unwrap_or(whatlang::Lang::Cmn)
+                .messages
+                .iter()
+                .filter(|v| v.owner == Role::User)
+                .map(|v| {
+                    v.content
+                        .iter()
+                        .filter_map(|v| match v {
+                            MessageContent::Text(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<String>>()
+                        .join("")
+                })
+                .filter(|v| v.len() > 0)
+                .last()
+                .map(|v| whatlang::detect_lang(&v))
+                .flatten()
+                .unwrap_or(whatlang::Lang::Cmn),
         };
         tracing::info!("User input language: {}", lang);
         let system_message =
@@ -613,9 +609,15 @@ impl<T: Config> LLMProvider<T> {
                             ));
                         }
                         Err(e) => {
-                            tracing::warn!("Unable to get tool result image {} from database: {}, skip.", id, e)
+                            tracing::warn!(
+                                "Unable to get tool result image {} from database: {}, skip.",
+                                id,
+                                e
+                            )
                         }
-                        Ok(None) => tracing::warn!("Tool result image {} not in database, skip.", id),
+                        Ok(None) => {
+                            tracing::warn!("Tool result image {} not in database, skip.", id)
+                        }
                     }
                 }
                 MessageContent::ImageBin(ref blob, _, _) => {

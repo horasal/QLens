@@ -1,4 +1,4 @@
-use crate::ImageResizer;
+use crate::{ImageResizer, parse_tool_args, save_image_to_db};
 use crate::schema::MessageContent;
 use crate::tools::{FONT_DATA, Tool, ToolDescription};
 use ab_glyph::PxScale;
@@ -54,27 +54,16 @@ impl Tool for BboxDrawTool {
             name_for_human: "图像标记工具(bbox marker tool)".to_string(),
             description_for_model: "Draw boxes on specific regions of an image based on given bounding boxes (bbox_2d) and an optional object label".to_string(),
             parameters: serde_json::to_value(schema_for!(BboxDrawArgs)).unwrap(),
-            args_format: "输入格式必须是JSON，其中图片必须用其对应的UUID指代。".to_string(),
+            args_format: "YAML或JSON，其中图片必须用其对应的UUID指代。".to_string(),
         }
     }
-    fn call(&self, args: &str) -> Result<MessageContent> {
-        let args: BboxDrawArgs = serde_json::from_str(args)?;
+    fn call(&self, args: &str) -> Result<Vec<MessageContent>> {
+        let args: BboxDrawArgs = parse_tool_args(args)?;
         let id = Uuid::from_str(&args.img_idx)?;
         let image = self.db.get(id)?.ok_or(anyhow::anyhow!("Image does not exist"))?;
         let cropped_img = draw_bboxes_rgba(&image, &args.bboxes)?;
-        let mut uuid = Uuid::new_v4();
-        for _ in 0..10 {
-            match self
-                .db
-                .compare_and_swap(uuid, None::<&[u8]>, Some(cropped_img.clone()))?
-            {
-                Ok(()) => break,
-                Err(_) => {
-                    uuid = Uuid::new_v4();
-                }
-            }
-        }
-        Ok(MessageContent::ImageRef(uuid, "".to_string()))
+        let uuid = save_image_to_db(&self.db, &cropped_img)?;
+        Ok(vec![MessageContent::ImageRef(uuid, "".to_string())])
     }
 }
 

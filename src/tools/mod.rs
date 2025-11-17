@@ -73,7 +73,7 @@ pub struct ToolDescription {
 pub trait Tool {
     fn name(&self) -> String;
     fn description(&self) -> ToolDescription;
-    fn call(&self, args: &str) -> Result<MessageContent, Error>;
+    fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error>;
 
     fn get_function_description(&self) -> String {
         let desc = self.description();
@@ -150,7 +150,7 @@ impl ToolSet {
             None => {
                 // 错误处理：工具未找到
                 let error_msg = format!("错误：未找到名为 '{}' 的工具。", tool_name);
-                MessageContent::Text(error_msg)
+                vec![MessageContent::Text(error_msg)]
             }
             Some(tool) => {
                 // 找到工具，执行它
@@ -161,7 +161,7 @@ impl ToolSet {
                     // 错误处理：工具执行失败
                     Err(e) => {
                         let error_msg = format!("工具 '{}' 执行失败：{}", tool_name, e);
-                        MessageContent::Text(error_msg)
+                        vec![MessageContent::Text(error_msg)]
                     }
                 }
             }
@@ -171,7 +171,7 @@ impl ToolSet {
         // LLM 需要这个结果（无论是数据还是错误信息）来继续下一步
         Message {
             owner: Role::Tools,
-            content: vec![result_content],
+            content: result_content,
             reasoning: vec![], // 工具结果没有 reasoning
             tool_use: vec![],  // 这不是一个 "tool_use" 动作，而是 "tool_use" 的结果
         }

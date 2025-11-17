@@ -1,9 +1,11 @@
+use crate::{parse_sourcecode_args, save_image_to_db};
 use crate::{MessageContent, Tool, ToolDescription, tools::FONT_DATA};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use deno_error::JsError;
 use resvg::{tiny_skia, usvg};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -14,7 +16,7 @@ use deno_core::{JsRuntime, OpState, RuntimeOptions, extension, op2, scope, v8};
 #[derive(Deserialize, JsonSchema)]
 pub struct JsInterpreterArgs {
     #[schemars(description = r##"Javascript code"##)]
-    code: String,
+    pub code: String,
 }
 
 impl Tool for JsInterpreter {
@@ -48,13 +50,17 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
   * `function save_image(base64_encoded_image_binary: string): string`: save a non-svg image to database and return its local uuid.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(JsInterpreterArgs)).unwrap(),
-            args_format: "输入格式必须是有效的JSON，其中code储存Javascript代码。".to_string(),
+            args_format: "输入格式必须是YAML(推荐)或JSON，其中code参数储存Javascript代码。".to_string(),
         }
     }
-    fn call(&self, args: &str) -> Result<MessageContent, anyhow::Error> {
-        let args: JsInterpreterArgs = serde_json::from_str(args)?;
+    fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
+        let args: JsInterpreterArgs = parse_sourcecode_args(args)?;
         let ret = self.run_code(&args.code)?;
-        Ok(MessageContent::Text(serde_json::to_string(&ret)?))
+        let mut v = vec![MessageContent::Text(serde_json::to_string(&ret)?)];
+        for uuid in ret.uuids.into_iter() {
+            v.push(MessageContent::ImageRef(uuid, "".to_string()));
+        }
+        Ok(v)
     }
 }
 
@@ -62,9 +68,12 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
 struct CodeResult {
     last_expression: String,
     terminal: String,
+    #[serde(skip)]
+    uuids: Vec<Uuid>,
 }
 
 struct LogSender(mpsc::Sender<String>);
+struct ImageSender(mpsc::Sender<Uuid>);
 struct DbHandle(sled::Tree);
 
 #[op2(fast)]
@@ -82,8 +91,10 @@ enum ImageError {
     ImageEmpty,
     #[error("Invalid UUID {0}")]
     InvalidUuid(#[from] uuid::Error),
-    #[error("Database error {0}")]
-    DatabaseError(#[from] sled::Error),
+    #[error("Database save error {0}")]
+    DatabaseError(#[from] anyhow::Error),
+    #[error("Database read error {0}")]
+    DatabaseReadError(#[from] sled::Error),
     #[error("Limit reached, can not save image any more")]
     MaxTries(usize),
     #[error("Invalid base64 {0}")]
@@ -142,11 +153,15 @@ fn op_save_svg(state: &mut OpState, #[string] svg_data: &str) -> Result<String, 
     let output_buf = pixmap.encode_png()
         .map_err(|_| ImageError::InternalErrorConvertPixMapToPng)?;
 
-    let uuid = uuid::Uuid::new_v4();
+
     let db = state.borrow::<DbHandle>();
-    match db.0.compare_and_swap(uuid, None as Option<&[u8]>, Some(output_buf)) {
-        Ok(Ok(_)) => Ok(uuid.to_string()),
-        Ok(Err(_)) => Err(ImageError::UuidCollision),
+    match save_image_to_db(&db.0, &output_buf) {
+        Ok(uuid) => {
+            if let Err(e) = state.borrow::<ImageSender>().0.send(uuid.clone()) {
+                tracing::warn!("Error to send svg from javascript back to llm, {}.", e)
+            }
+            Ok(uuid.to_string())
+        }
         Err(e) => Err(ImageError::DatabaseError(e)),
     }
 }
@@ -163,13 +178,16 @@ fn op_save_image(state: &mut OpState, #[string] img_base64: String) -> Result<St
     } else {
         state.put(Counter { put_count: 1 });
     }
-    let db = state.borrow::<DbHandle>();
     match BASE64_STANDARD.decode(img_base64) {
         Ok(b) => {
-            let uuid = uuid::Uuid::new_v4();
-            match db.0.compare_and_swap(uuid, None as Option<&[u8]>, Some(b)) {
-                Ok(Ok(_)) => Ok(uuid.to_string()),
-                Ok(Err(_)) => Err(ImageError::UuidCollision),
+            let db = state.borrow::<DbHandle>();
+            match save_image_to_db(&db.0, &b) {
+                Ok(uuid) => {
+                    if let Err(e) = state.borrow::<ImageSender>().0.send(uuid.clone()) {
+                        tracing::warn!("Error to saved image from javascript back to llm, {}.", e)
+                    }
+                    Ok(uuid.to_string())
+                },
                 Err(e) => Err(ImageError::DatabaseError(e)),
             }
         }
@@ -188,7 +206,7 @@ fn op_retrieve_image(
     match db.0.get(uuid) {
         Ok(Some(bytes)) => Ok(BASE64_STANDARD.encode(bytes)),
         Ok(None) => Err(ImageError::ImageEmpty),
-        Err(e) => Err(ImageError::DatabaseError(e)),
+        Err(e) => Err(ImageError::DatabaseReadError(e)),
     }
 }
 
@@ -234,6 +252,7 @@ impl JsInterpreter {
         let builder = thread::Builder::new().stack_size(16 * 1024 * 1024);
         let thread_handle = builder.spawn(move || {
             let (tx, rx) = mpsc::channel::<String>();
+            let (tx_img, rx_img) = mpsc::channel::<Uuid>();
 
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -250,6 +269,7 @@ impl JsInterpreter {
                     let state = js_runtime.op_state();
                     let mut state = state.borrow_mut();
                     state.put(LogSender(tx.clone()));
+                    state.put(ImageSender(tx_img.clone()));
                     state.put(DbHandle(db));
                 }
                 let setup_script = r#"
@@ -266,7 +286,7 @@ impl JsInterpreter {
                         } else if (dom.window && dom.window.XMLSerializer) {
                             globalThis.XMLSerializer = dom.window.XMLSerializer;
                         } else {
-                            Deno.core.ops.console_op_print("stderr: Warning: Using simple XMLSerializer polyfill.\n", true);
+                            Deno.core.ops.console_op_print("Notice: Using simple XMLSerializer polyfill.\n", true);
                             globalThis.XMLSerializer = class {
                                 serializeToString(node) {
                                     return node.outerHTML || "";
@@ -347,19 +367,23 @@ impl JsInterpreter {
             });
 
             drop(tx);
+            drop(tx_img);
 
             let logs: String = rx.into_iter().collect();
+            let uuids: Vec<Uuid> = rx_img.into_iter().collect();
             match execution_result {
                 Ok(res) => {
                     Ok(CodeResult {
                         last_expression: res,
                         terminal: logs,
+                        uuids: uuids,
                     })
                 }
                 Err(e) => {
                     Ok(CodeResult {
                         last_expression: e.to_string(),
                         terminal: logs,
+                        uuids: uuids,
                     })
                 }
             }

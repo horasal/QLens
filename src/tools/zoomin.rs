@@ -5,7 +5,7 @@ use std::io::Cursor;
 use std::str::FromStr;
 use uuid::Uuid;
 
-use crate::ImageResizer;
+use crate::{ImageResizer, parse_tool_args};
 use crate::schema::MessageContent;
 use crate::tools::utils::save_image_to_db;
 use crate::tools::{Tool, ToolDescription};
@@ -13,20 +13,25 @@ use anyhow::{Error, anyhow};
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-// Tool
-
 #[derive(Deserialize, JsonSchema)]
 struct ZoomArgs {
+    #[schemars(
+        description = "list bounding boxes, each will generated a zoomed image"
+    )]
+    bbox_list: Vec<Bbox2d>,
+    #[schemars(description = "The local uuid of input image")]
+    img_idx: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct Bbox2d {
     #[schemars(
         description = "The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right cornerrelative coordinates.",
     )]
     bbox_2d: [f64; 4],
 
-    #[schemars(description = "The name or label of the object in the specified bounding box")]
-    label: String,
-
-    #[schemars(description = "The local uuid of input image")]
-    img_idx: String, // 使用更具体的数字类型
+    #[schemars(description = "Optional name or label of the object in the specified bounding box")]
+    label: Option<String>,
 }
 
 pub struct ZoomInTool {
@@ -47,25 +52,29 @@ impl Tool for ZoomInTool {
     fn description(&self) -> ToolDescription {
         ToolDescription {
             name_for_model: "image_zoom_in_tool".to_string(),
-            name_for_human: "图像局部裁切/放大工具(image crop and zoom-in tool)".to_string(),
-            description_for_model: "Crop and zoom in on a specific region of an image by cropping it based on a bounding box (bbox) and an optional object label".to_string(),
+            name_for_human: "图像局部裁切/放大工具(image crop and zoom-in)".to_string(),
+            description_for_model: "Crop and zoom in on specific regions of an image by cropping it based on a bounding box (bbox) and an optional object label".to_string(),
             parameters: serde_json::to_value(schema_for!(ZoomArgs)).unwrap(),
-            args_format: "输入格式必须是JSON，其中图片必须用其对应的UUID指代。".to_string(),
+            args_format: "YAML或JSON，其中图片必须用其对应的UUID指代。".to_string(),
         }
     }
-    fn call(&self, args: &str) -> Result<MessageContent, Error> {
-        let args: ZoomArgs = serde_json::from_str(args)?;
+    fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error> {
+        let args: ZoomArgs = parse_tool_args(args)?;
         let id = Uuid::from_str(&args.img_idx)?;
+        let mut v = Vec::new();
         let image = self.db.get(id)?.ok_or(anyhow!("Image does not exist"))?;
-        let bbox = BBox {
-            x1: args.bbox_2d[0],
-            y1: args.bbox_2d[1],
-            x2: args.bbox_2d[2],
-            y2: args.bbox_2d[3],
-        };
-        let cropped_img = image_zoom_in(&image, bbox)?;
-        let uuid = save_image_to_db(&self.db, &cropped_img)?;
-        Ok(MessageContent::ImageRef(uuid, args.label))
+        for b in args.bbox_list.into_iter() {
+            let bbox = BBox {
+                x1: b.bbox_2d[0],
+                y1: b.bbox_2d[1],
+                x2: b.bbox_2d[2],
+                y2: b.bbox_2d[3],
+            };
+            let cropped_img = image_zoom_in(&image, bbox)?;
+            let uuid = save_image_to_db(&self.db, &cropped_img)?;
+            v.push(MessageContent::ImageRef(uuid, b.label.unwrap_or("".to_string())));
+        }
+        Ok(v)
     }
 }
 

@@ -1,15 +1,16 @@
-use anyhow::{anyhow, Context};
-use image::{self, GenericImage, GenericImageView, Rgba, RgbaImage};
+use anyhow::{anyhow};
+use image::{self, Rgba, RgbaImage};
 use resvg::tiny_skia;
 use resvg::usvg;
 use schemars::JsonSchema;
 use schemars::schema_for;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::cmp::max;
 use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::parse_tool_args;
 use crate::tools::FONT_DATA;
 use crate::tools::utils::save_image_to_db;
 use crate::{MessageContent, Tool, ToolDescription};
@@ -106,7 +107,7 @@ impl Tool for ImageMemoTool {
     fn description(&self) -> ToolDescription {
         ToolDescription {
             name_for_model: "image_memo".to_string(),
-            name_for_human: "Visual Notebook (Memo)".to_string(),
+            name_for_human: "Visual Notebook (image_memo)".to_string(),
             description_for_model: r##"A persistent visual notebook.
 Use this to:
 1. Organize thoughts by drawing diagrams (SVG).
@@ -116,12 +117,12 @@ The memo persists across tool calls in this session.
 IMPORTANT: Use coordinate format [x1, y1, x2, y2] for all bounding boxes.
 "##.to_string(),
             parameters: serde_json::to_value(schema_for!(ImageMemoArgs)).unwrap(),
-            args_format: "JSON".to_string(),
+            args_format: "YAML或JSON".to_string(),
         }
     }
 
-    fn call(&self, args: &str) -> Result<MessageContent, anyhow::Error> {
-        let args: ImageMemoArgs = serde_json::from_str(args)?;
+    fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
+        let args: ImageMemoArgs = parse_tool_args(args)?;
 
         match args {
             ImageMemoArgs::Read { bbox } => {
@@ -134,22 +135,22 @@ IMPORTANT: Use coordinate format [x1, y1, x2, y2] for all bounding boxes.
 
                     let (mw, mh) = memo.dimensions();
                     if x + w > mw || y + h > mh {
-                         return Ok(MessageContent::Text("Error: Read bbox out of bounds.".to_string()));
+                         return Ok(vec![MessageContent::Text("Error: Read bbox out of bounds.".to_string())]);
                     }
                     let sub_img = image::imageops::crop(&mut memo, x, y, w, h).to_image();
                     let temp_uuid = save_image_to_db(&self.db, &image_to_bytes(&sub_img)?)?;
-                    return Ok(MessageContent::ImageRef(temp_uuid, "Memo View (Cropped)".to_string()));
+                    return Ok(vec![MessageContent::ImageRef(temp_uuid, "Memo View (Cropped)".to_string())]);
                 }
 
                 // Read 全图时，依然保存一次 current memo 确保有最新的 uuid（虽然内容没变）
                 // 这个UUID跟Chat Session是关联的，chat被删除后就会自动消失，不需要担心空间问题
                 let uuid = self.save_memo(&memo)?;
-                Ok(MessageContent::ImageRef(uuid, "Current Memo".to_string()))
+                Ok(vec![MessageContent::ImageRef(uuid, "Current Memo".to_string())])
             },
             ImageMemoArgs::Clear => {
                 let empty = RgbaImage::from_pixel(DEFAULT_WIDTH, DEFAULT_HEIGHT, Rgba([255, 255, 255, 255]));
                 let uuid = self.save_memo(&empty)?;
-                Ok(MessageContent::Text(format!("Memo cleared. New UUID: {}", uuid)))
+                Ok(vec![MessageContent::Text(format!("Memo cleared. New UUID: {}", uuid))])
             },
             ImageMemoArgs::Write(write_args) => {
                 let mut memo = self.get_current_memo()?;
@@ -218,10 +219,10 @@ IMPORTANT: Use coordinate format [x1, y1, x2, y2] for all bounding boxes.
                 }
 
                 let uuid = self.save_memo(&memo)?;
-                Ok(MessageContent::ImageRef(
+                Ok(vec![MessageContent::ImageRef(
                     uuid,
                     write_args.label.unwrap_or("Memo Updated".to_string())
-                ))
+                )])
             }
         }
     }

@@ -8,6 +8,7 @@ use std::time::Duration;
 use crate::MessageContent;
 use crate::Tool;
 use crate::ToolDescription;
+use crate::parse_tool_args;
 use crate::tools::utils::save_image_to_db;
 use crate::tools::utils::save_svg_to_db;
 
@@ -69,7 +70,7 @@ impl Tool for FetchTool {
     fn description(&self) -> ToolDescription {
         ToolDescription {
             name_for_model: "curl_url".to_string(),
-            name_for_human: "网页抓取工具(curl_url_tool)".to_string(),
+            name_for_human: "网页抓取工具(curl_url)".to_string(),
             description_for_model:
 "Access and retrieve remote content from a specific URL and save to local database.
 * Allow to fetch image binary and any text-base contents.
@@ -77,12 +78,12 @@ impl Tool for FetchTool {
 * If remote content is HTML, it will be automatically converted to Markdown and all links are preserved as remote urls.
 * Other text-based content will be returned as-is.".to_string(),
             parameters: serde_json::to_value(schema_for!(FetchArgs)).unwrap(),
-            args_format: "输入格式必须是JSON。".to_string(),
+            args_format: "YAML或JSON。".to_string(),
         }
     }
 
-    fn call(&self, args: &str) -> Result<MessageContent, anyhow::Error> {
-        let args: FetchArgs = serde_json::from_str(args)?;
+    fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
+        let args: FetchArgs = parse_tool_args(args)?;
         let mut req_builder = match args.method.unwrap_or(FetchMethod::Get) {
             FetchMethod::Get => self.client.get(&args.url),
             FetchMethod::Post => self.client.post(&args.url),
@@ -102,10 +103,10 @@ impl Tool for FetchTool {
         let res = req_builder.send()?;
         let status = res.status();
         if !status.is_success() {
-            return Ok(MessageContent::Text(format!(
+            return Ok(vec![MessageContent::Text(format!(
                 "Failed to fetch URL. HTTP Status: {}",
                 status
-            )));
+            ))]);
         }
         let mime_type = if let Some(content_type) = res.headers().get(CONTENT_TYPE) {
             let content_type_str = content_type.to_str().unwrap_or("");
@@ -140,12 +141,12 @@ impl Tool for FetchTool {
                     .build()
                     .convert(&html)?;
 
-                Ok(MessageContent::Text(markdown))
+                Ok(vec![MessageContent::Text(markdown)])
             }
             (mime::TEXT, _)
             | (mime::APPLICATION, mime::JSON)
             | (mime::APPLICATION, mime::JAVASCRIPT)
-            | (mime::APPLICATION, mime::XML) => Ok(MessageContent::Text(res.text()?)),
+            | (mime::APPLICATION, mime::XML) => Ok(vec![MessageContent::Text(res.text()?)]),
 
             (mime::IMAGE, sub_type) => {
                 let uuid = if sub_type.as_str().to_lowercase().contains("svg") {
@@ -154,25 +155,25 @@ impl Tool for FetchTool {
                     let bytes = res.bytes()?.to_vec();
                     save_image_to_db(&self.db, &super::convert_to_png(bytes)?)?
                 };
-                Ok(MessageContent::ImageRef(
+                Ok(vec![MessageContent::ImageRef(
                     uuid,
                     args.label.unwrap_or(args.url),
-                ))
+                )])
             }
 
             _ => {
                 if let Some(suffix) = mime_type.suffix() {
                     if suffix == mime::JSON || suffix == mime::XML {
-                        return Ok(MessageContent::Text(res.text()?));
+                        return Ok(vec![MessageContent::Text(res.text()?)]);
                     }
                 }
 
                 match res.text() {
-                    Ok(text) => Ok(MessageContent::Text(text)),
-                    Err(_) => Ok(MessageContent::Text(format!(
+                    Ok(text) => Ok(vec![MessageContent::Text(text)]),
+                    Err(_) => Ok(vec![MessageContent::Text(format!(
                         "Unsupported Binary Content-Type: {}",
                         mime_type
-                    ))),
+                    ))]),
                 }
             }
         }

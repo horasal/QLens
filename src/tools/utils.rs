@@ -3,9 +3,69 @@ use std::{io::Cursor, sync::Arc};
 use anyhow::anyhow;
 use image::ImageFormat;
 use resvg::{tiny_skia, usvg};
+use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
+use crate::tools::code_interpreter::JsInterpreterArgs;
+
 pub const FONT_DATA: &'static [u8] = include_bytes!("../../font.ttf");
+
+fn strip_markdown_fences(input: &str) -> (bool, &str) {
+    let input = input.trim();
+
+    // 检查是否被 ``` 包裹
+    if input.starts_with("```") {
+        if let Some(end_idx) = input.rfind("```") {
+            if end_idx > 3 {
+                let inner = &input[3..end_idx];
+                // 去掉第一行的语言标识符 (如 ```json, ```yaml)
+                if let Some(newline_idx) = inner.find('\n') {
+                    // 检查第一行是否像语言标识符（不包含符号，只有字母数字）
+                    let first_line = &inner[..newline_idx].trim();
+                    // 简单的启发式规则：如果没有特殊符号，就认为是语言tag
+                    if !first_line.contains(|c: char| !c.is_alphanumeric()) {
+                        return (true, inner[newline_idx + 1..].trim());
+                    }
+                }
+                return (true, inner.trim());
+            }
+        }
+    }
+    // 兼容单行代码块 `...`
+    if input.starts_with('`') && input.ends_with('`') && input.len() > 1 {
+        return (false, input.trim_matches('`').trim());
+    }
+
+    (false, input)
+}
+
+pub fn parse_sourcecode_args(input: &str) -> Result<JsInterpreterArgs, anyhow::Error> {
+    let (is_code_block, clean_input) = strip_markdown_fences(input);
+    if is_code_block {
+        return Ok(JsInterpreterArgs {
+            code: clean_input.to_string()
+        });
+    }
+    parse_tool_args(clean_input)
+}
+
+pub fn parse_tool_args<T: DeserializeOwned>(input: &str) -> Result<T, anyhow::Error> {
+    let clean_input = input;
+    if let Ok(json_result) = serde_json::from_str::<T>(clean_input) {
+        return Ok(json_result);
+    }
+    match serde_yaml::from_str::<T>(clean_input) {
+        Ok(yaml_result) => Ok(yaml_result),
+        Err(e) => {
+            // 如果都失败了，返回一个包含两种尝试的错误信息
+            Err(anyhow!(
+                "Failed to parse arguments. Tried JSON and YAML.\nInput: {}\nError: {}",
+                clean_input,
+                e
+            ))
+        }
+    }
+}
 
 pub fn convert_to_png(input_data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
     let format = image::guess_format(&input_data)?;
