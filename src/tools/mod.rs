@@ -1,8 +1,8 @@
-use crate::schema::*;
+use crate::{blob::BlobStorage, schema::*};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 
 mod prompt_template;
@@ -25,6 +25,7 @@ pub use fetch::FetchTool;
 mod utils;
 pub use utils::*;
 
+#[allow(dead_code)]
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Display, EnumIter, Serialize, Deserialize)]
@@ -43,7 +44,7 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub fn create_tool(&self, db: sled::Tree) -> Box<dyn Tool + Send + Sync> {
+    pub fn create_tool(&self, db: Arc<dyn BlobStorage>) -> Box<dyn Tool + Send + Sync> {
         match self {
             ToolKind::ZoomIn => Box::new(ZoomInTool::new(db)),
             ToolKind::ImageMemo => Box::new(ImageMemoTool::new(db)),
@@ -230,11 +231,12 @@ fn test_builder() {
         .path("./tmp")
         .open()
         .unwrap();
-    let zoom_tool = Box::new(ZoomInTool::new(db.open_tree("image").unwrap()));
-    let bbox_tool = Box::new(BboxDrawTool::new(db.open_tree("image").unwrap()));
-    let js_tool = Box::new(JsInterpreter::new(db.open_tree("image").unwrap()));
-    let curl_tool = Box::new(FetchTool::new(db.open_tree("image").unwrap()));
-    let mem_tool = Box::new(ImageMemoTool::new(db.open_tree("image").unwrap()));
+    let tree = Arc::new(db.open_tree("image").unwrap());
+    let zoom_tool = Box::new(ZoomInTool::new(tree.clone()));
+    let bbox_tool = Box::new(BboxDrawTool::new(tree.clone()));
+    let js_tool = Box::new(JsInterpreter::new(tree.clone()));
+    let curl_tool = Box::new(FetchTool::new(tree.clone()));
+    let mem_tool = Box::new(ImageMemoTool::new(tree.clone()));
     let toolset = ToolSet::builder()
         .add_tool(zoom_tool)
         .add_tool(bbox_tool)

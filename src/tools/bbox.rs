@@ -1,4 +1,5 @@
-use crate::{ImageResizer, parse_tool_args, save_image_to_db};
+use crate::blob::BlobStorage;
+use crate::{ImageResizer, parse_tool_args};
 use crate::schema::MessageContent;
 use crate::tools::{FONT_DATA, Tool, ToolDescription};
 use ab_glyph::PxScale;
@@ -11,6 +12,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::str::FromStr;
+use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Deserialize, JsonSchema)]
@@ -34,11 +36,11 @@ pub struct Bbox {
 }
 
 pub struct BboxDrawTool {
-    db: sled::Tree,
+    db: Arc<dyn BlobStorage>,
 }
 
 impl BboxDrawTool {
-    pub fn new(ctx: sled::Tree) -> Self {
+    pub fn new(ctx: Arc<dyn BlobStorage>) -> Self {
         Self { db: ctx }
     }
 }
@@ -62,7 +64,7 @@ impl Tool for BboxDrawTool {
         let id = Uuid::from_str(&args.img_idx)?;
         let image = self.db.get(id)?.ok_or(anyhow::anyhow!("Image does not exist"))?;
         let cropped_img = draw_bboxes_rgba(&image, &args.bboxes)?;
-        let uuid = save_image_to_db(&self.db, &cropped_img)?;
+        let uuid = self.db.save(&cropped_img)?;
         Ok(vec![MessageContent::ImageRef(uuid, "".to_string())])
     }
 }

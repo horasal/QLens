@@ -35,21 +35,8 @@ async fn main() -> Result<()> {
     let client = Client::with_config(config);
     tracing::info!("Created openai client.");
 
-    let db = sled::Config::new()
-        .temporary(false)
-        .use_compression(true)
-        .path("chat_data")
-        .open()?;
-    let image_db = db.open_tree("image")?;
-    let history_db = db.open_tree("history")?;
     tracing::info!("DB started.");
-    let zoom_tool = Box::new(ZoomInTool::new(image_db.clone()));
-    let bbox_tool = Box::new(BboxDrawTool::new(image_db.clone()));
-    let toolset = ToolSet::builder()
-        .add_tool(zoom_tool)
-        .add_tool(bbox_tool)
-        .build();
-    let llm = LLMProvider::new(client, history_db, image_db, toolset)?;
+    let llm = LLMProvider::new(client, "chat_data", &vec![])?;
     tracing::info!("LLMProvider created.");
 
     let entry = llm.new_chat()?;

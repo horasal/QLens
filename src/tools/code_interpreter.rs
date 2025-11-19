@@ -1,4 +1,5 @@
-use crate::{parse_sourcecode_args, save_image_to_db};
+use crate::blob::{BlobStorage, BlobStorageError};
+use crate::{parse_sourcecode_args};
 use crate::{MessageContent, Tool, ToolDescription, tools::FONT_DATA};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use deno_error::JsError;
@@ -74,7 +75,7 @@ struct CodeResult {
 
 struct LogSender(mpsc::Sender<String>);
 struct ImageSender(mpsc::Sender<Uuid>);
-struct DbHandle(sled::Tree);
+struct DbHandle(Arc<dyn BlobStorage>);
 
 #[op2(fast)]
 fn console_op_print(state: &mut OpState, #[string] msg: String, is_err: bool) {
@@ -92,13 +93,12 @@ enum ImageError {
     #[error("Invalid UUID {0}")]
     InvalidUuid(#[from] uuid::Error),
     #[error("Database save error {0}")]
-    DatabaseError(#[from] anyhow::Error),
-    #[error("Database read error {0}")]
-    DatabaseReadError(#[from] sled::Error),
+    DatabaseError(#[from] BlobStorageError),
     #[error("Limit reached, can not save image any more")]
     MaxTries(usize),
     #[error("Invalid base64 {0}")]
     InvalidBase64(#[from] base64::DecodeError),
+    #[allow(dead_code)]
     #[error("Uuid collision occured, please try again")]
     UuidCollision,
     #[error("Invalid SVG data {0}")]
@@ -155,7 +155,7 @@ fn op_save_svg(state: &mut OpState, #[string] svg_data: &str) -> Result<String, 
 
 
     let db = state.borrow::<DbHandle>();
-    match save_image_to_db(&db.0, &output_buf) {
+    match db.0.save(&output_buf) {
         Ok(uuid) => {
             if let Err(e) = state.borrow::<ImageSender>().0.send(uuid.clone()) {
                 tracing::warn!("Error to send svg from javascript back to llm, {}.", e)
@@ -181,7 +181,7 @@ fn op_save_image(state: &mut OpState, #[string] img_base64: String) -> Result<St
     match BASE64_STANDARD.decode(img_base64) {
         Ok(b) => {
             let db = state.borrow::<DbHandle>();
-            match save_image_to_db(&db.0, &b) {
+            match db.0.save(&b) {
                 Ok(uuid) => {
                     if let Err(e) = state.borrow::<ImageSender>().0.send(uuid.clone()) {
                         tracing::warn!("Error to saved image from javascript back to llm, {}.", e)
@@ -206,7 +206,7 @@ fn op_retrieve_image(
     match db.0.get(uuid) {
         Ok(Some(bytes)) => Ok(BASE64_STANDARD.encode(bytes)),
         Ok(None) => Err(ImageError::ImageEmpty),
-        Err(e) => Err(ImageError::DatabaseReadError(e)),
+        Err(e) => Err(ImageError::DatabaseError(e)),
     }
 }
 
@@ -216,7 +216,7 @@ extension!(
 );
 
 pub struct JsInterpreter {
-    db: sled::Tree,
+    db: Arc<dyn BlobStorage>,
 }
 const LOAD_SOURCE: &[(&str, &str)] = &[
     ("linkedom", include_str!("prelude/linkedom.bundle.js")),
@@ -230,7 +230,7 @@ const LOAD_SOURCE: &[(&str, &str)] = &[
 ];
 
 impl JsInterpreter {
-    pub fn new(db: sled::Tree) -> Self {
+    pub fn new(db: Arc<dyn BlobStorage>) -> Self {
         Self { db }
     }
 
@@ -400,7 +400,7 @@ impl JsInterpreter {
 #[test]
 fn test_js_run() {
     let db = sled::Config::new().temporary(true).open().unwrap();
-    let ci = JsInterpreter::new(db.open_tree("a").unwrap());
+    let ci = JsInterpreter::new(Arc::new(db.open_tree("a").unwrap()));
     let output = ci
         .run_code("const c = async () => { console.log(\"test\"); }; await c();")
         .unwrap();

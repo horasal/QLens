@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { renderMarkdown } from '../lib/markdownRenderer';
+	//import { renderMarkdown } from '../lib/markdownRenderer';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { resolve } from '$app/paths';
+	import MarkdownBlock from './MarkdownBlock.svelte';
 	import {
 		_,
 		register,
@@ -234,7 +235,7 @@
 			console.log('WebSocket connected');
 			wsReconnecting = false;
 			reconnectInterval = 1000;
-			if (currentChat) loadChat(currentChat.id);
+			if (!(currentChat && !processingChatIds.has(currentChat.id))) loadChat(currentChat.id);
 		};
 
 		ws.onclose = (e) => {
@@ -511,7 +512,7 @@
 	function handleScroll() {
 		if (!chatContainer) return;
 
-		const threshold = 15; // 距离底部的容差 (px)
+		const threshold = 25; // 距离底部的容差 (px)
 		const isNearBottom =
 			chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < threshold;
 
@@ -711,9 +712,10 @@
 											<div class="mt-2">
 												{#each message.content as item}
 													{#if 'Text' in item}
-														<div class="prose max-w-none" on:click={handleMarkdownClick}>
-															{@html renderMarkdown(item.Text)}
-														</div>
+													<MarkdownBlock
+                                                        content={item.Text}
+                                                        on:imageClick={(e) => showImageModal(e.detail)}
+                                                    />
 													{:else if 'ImageRef' in item}
 														<img
 															src={getImageUrl(item)}
@@ -728,9 +730,10 @@
 									{:else}
 										{#each message.content as item}
 											{#if 'Text' in item}
-												<div class="prose max-w-none" on:click={handleMarkdownClick}>
-													{@html renderMarkdown(item.Text)}
-												</div>
+											<MarkdownBlock
+                                                        content={item.Text}
+                                                        on:imageClick={(e) => showImageModal(e.detail)}
+                                                    />
 											{:else if 'ImageRef' in item}
 												<img
 													src={getImageUrl(item)}
@@ -756,9 +759,10 @@
 											<div class="collapse-content">
 												{#each message.reasoning as item}
 													{#if 'Text' in item}
-														<div class="prose max-w-none">
-															{@html renderMarkdown(item.Text, { disableImages: true })}
-														</div>
+													<MarkdownBlock
+                                                        content={item.Text}
+                                                        on:imageClick={(e) => showImageModal(e.detail)}
+                                                    />
 													{/if}
 												{/each}
 											</div>
@@ -795,9 +799,10 @@
 									{/if}
 									{#each message.content as item}
 										{#if 'Text' in item}
-											<div class="prose max-w-none" on:click={handleMarkdownClick}>
-												{@html renderMarkdown(item.Text)}
-											</div>
+										<MarkdownBlock
+                                                        content={item.Text}
+                                                        on:imageClick={(e) => showImageModal(e.detail)}
+                                                    />
 										{/if}
 									{/each}
 								</div>

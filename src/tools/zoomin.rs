@@ -3,11 +3,12 @@ use image::{
 };
 use std::io::Cursor;
 use std::str::FromStr;
+use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::blob::BlobStorage;
 use crate::{ImageResizer, parse_tool_args};
 use crate::schema::MessageContent;
-use crate::tools::utils::save_image_to_db;
 use crate::tools::{Tool, ToolDescription};
 use anyhow::{Error, anyhow};
 use schemars::{JsonSchema, schema_for};
@@ -35,11 +36,11 @@ struct Bbox2d {
 }
 
 pub struct ZoomInTool {
-    db: sled::Tree,
+    db: Arc<dyn BlobStorage>,
 }
 
 impl ZoomInTool {
-    pub fn new(ctx: sled::Tree) -> Self {
+    pub fn new(ctx: Arc<dyn BlobStorage>) -> Self {
         Self { db: ctx }
     }
 }
@@ -71,7 +72,7 @@ impl Tool for ZoomInTool {
                 y2: b.bbox_2d[3],
             };
             let cropped_img = image_zoom_in(&image, bbox)?;
-            let uuid = save_image_to_db(&self.db, &cropped_img)?;
+            let uuid = self.db.save(&cropped_img)?;
             v.push(MessageContent::ImageRef(uuid, b.label.unwrap_or("".to_string())));
         }
         Ok(v)

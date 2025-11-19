@@ -175,21 +175,7 @@ fn initialize_provider(arg: &Arguments) -> Result<LLMProvider<OpenAIConfig>> {
         .with_api_key(&arg.api_key);
     let client = Client::with_config(config);
     tracing::info!("Created openai client.");
-
-    let db = sled::Config::new()
-        .temporary(false)
-        .path(&arg.database_path)
-        .use_compression(true)
-        .open()?;
-    let image_db = db.open_tree("image")?;
-    let history_db = db.open_tree("history")?;
-    tracing::info!("DB started.");
-    let toolset = arg
-        .tools.iter()
-        .map(|v| { v.create_tool(image_db.clone()) })
-        .fold(ToolSet::builder(), |ts, t| ts.add_tool(t))
-        .build();
-    let llm = LLMProvider::new(client, history_db, image_db, toolset)?;
+    let llm = LLMProvider::new(client, &arg.database_path, &arg.tools)?;
     tracing::info!("LLMProvider created.");
     Ok(llm)
 }
@@ -411,94 +397,34 @@ async fn new_chat_handler(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 async fn get_history_handler(State(state): State<Arc<AppState>>) -> Json<Vec<ChatMeta>> {
-    Json(
-        state
-            .llm
-            .history
-            .iter()
-            .filter_map(|v| v.ok())
-            .filter_map(|(_, v)| serde_json::from_slice(&v).ok())
-            .collect(),
-    )
+    Json(state.llm.get_history_list())
 }
 
 async fn delete_chat_handler(
     State(state): State<Arc<AppState>>,
     Path(uuid): Path<Uuid>,
 ) -> Response {
-    match state.llm.history.remove(uuid) {
-        Ok(Some(ivec)) => match serde_json::from_slice::<ChatEntry>(&ivec) {
-            Ok(entry) => {
-                for e in entry.messages.into_iter() {
-                    match e.owner {
-                        Role::Tools => {
-                            for c in e.content.into_iter() {
-                                match c {
-                                    MessageContent::ImageBin(_, img_id, _)
-                                    | MessageContent::ImageRef(img_id, _) => {
-                                        match state.llm.image.remove(img_id) {
-                                            Ok(None) => tracing::warn!(
-                                                "Image {} referenced by {} but not exist while deleting.",
-                                                img_id,
-                                                uuid
-                                            ),
-                                            Err(e) => tracing::error!(
-                                                "Failed to delete image {} from database, {}",
-                                                img_id,
-                                                e
-                                            ),
-                                            Ok(_) => {}
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                StatusCode::OK.into_response()
-            }
-            Err(e) => {
-                tracing::error!("Failed to deserialize chat entry {}: {}", uuid, e);
-                StatusCode::OK.into_response()
-            }
-        },
-        Ok(None) => StatusCode::OK.into_response(),
+    match state.llm.delete_chat(uuid) {
+        Ok(()) => StatusCode::OK.into_response(),
         Err(e) => {
-            tracing::error!("Failed to get chat entry: {}", e);
+            tracing::error!("Failed to delete chat entry: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
         }
     }
 }
 
 async fn get_chat_handler(State(state): State<Arc<AppState>>, Path(uuid): Path<Uuid>) -> Response {
-    let db_result = match state.llm.history.get(uuid) {
-        Ok(Some(ivec)) => Ok(ivec),
+    match state.llm.get_chat(uuid) {
+        Ok(Some(chat)) => Json(chat).into_response(),
         Ok(None) => {
             // 没找到，这是客户端错误 (404)
             tracing::warn!("Chat entry not found: {}", uuid);
-            return (StatusCode::NOT_FOUND, "Chat not found").into_response();
+            (StatusCode::NOT_FOUND, "Chat not found").into_response()
         }
         Err(e) => {
             // 数据库IO错误，这是服务器错误 (500)
             tracing::error!("Failed to get chat entry: {}", e);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, "Database error"))
-        }
-    };
-
-    // 如果 db_result 是 Err，提前返回
-    let data = match db_result {
-        Ok(data) => data,
-        Err(response) => return response.into_response(),
-    };
-
-    match serde_json::from_slice::<ChatEntry>(&data) {
-        Ok(entry) => Json(entry).into_response(),
-        Err(e) => {
-            // 数据损坏，这是服务器错误 (500)
-            tracing::error!("Failed to deserialize chat entry: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Corrupted data").into_response()
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
         }
     }
 }
@@ -513,9 +439,8 @@ async fn download_image(
     State(state): State<Arc<AppState>>,
     Path(uuid): Path<Uuid>,
 ) -> impl IntoResponse {
-    match state.llm.image.get(uuid) {
-        Ok(Some(ivec)) => {
-            let bytes: Vec<u8> = ivec.to_vec();
+    match state.llm.get_image(uuid) {
+        Ok(Some(bytes)) => {
             let mut headers = HeaderMap::new();
             headers.insert(
                 CONTENT_TYPE,

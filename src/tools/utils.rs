@@ -4,7 +4,6 @@ use anyhow::anyhow;
 use image::ImageFormat;
 use resvg::{tiny_skia, usvg};
 use serde::de::DeserializeOwned;
-use uuid::Uuid;
 
 use crate::tools::code_interpreter::JsInterpreterArgs;
 
@@ -86,7 +85,7 @@ pub fn convert_to_png(input_data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
     }
 }
 
-pub fn save_svg_to_db(db: &sled::Tree, svg_data: &str) -> Result<Uuid, anyhow::Error> {
+pub fn convert_svg_to_png(svg_data: &str) -> Result<Vec<u8>, anyhow::Error> {
     let mut font_db = usvg::fontdb::Database::new();
     font_db.load_font_data(FONT_DATA.to_vec());
 
@@ -116,21 +115,7 @@ pub fn save_svg_to_db(db: &sled::Tree, svg_data: &str) -> Result<Uuid, anyhow::E
 
     resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
 
-    let output_buf = pixmap.encode_png()?;
-    save_image_to_db(db, &output_buf)
-}
-
-pub fn save_image_to_db(db: &sled::Tree, img: &[u8]) -> Result<Uuid, anyhow::Error> {
-    let mut uuid = Uuid::new_v4();
-    for _ in 0..10 {
-        match db.compare_and_swap(uuid, None::<&[u8]>, Some(img))? {
-            Ok(()) => break,
-            Err(_) => {
-                uuid = Uuid::new_v4();
-            }
-        }
-    }
-    Ok(uuid)
+    pixmap.encode_png().map_err(|e| e.into())
 }
 
 /// 用于智能调整大小的辅助结构体

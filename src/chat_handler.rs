@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use crate::{
-    ChatEntry, FN_MAX_LEN, FN_STOP_WORDS,
+    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolKind,
     schema::{Message, MessageContent, Role, ToolUse},
     tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet},
 };
-use anyhow::{Error, anyhow, bail};
+use anyhow::{Error, anyhow};
 use async_openai::types::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
     ChatCompletionRequestAssistantMessageContentPart, ChatCompletionRequestMessageContentPartImage,
@@ -128,7 +128,7 @@ where
     T: Config,
 {
     client: Arc<Client<T>>,
-    pub history: sled::Tree,
+    history: sled::Tree,
     pub image: sled::Tree,
     toolset: Arc<ToolSet>,
 }
@@ -147,17 +147,73 @@ impl<T: Config> Clone for LLMProvider<T> {
 impl<T: Config> LLMProvider<T> {
     pub fn new(
         client: Client<T>,
-        history: sled::Tree,
-        image: sled::Tree,
-        toolset: ToolSet,
+        db_path: &str,
+        active_tools: &[ToolKind],
     ) -> Result<Self, Error> {
+        let db = sled::Config::new()
+            .temporary(false)
+            .path(db_path)
+            .use_compression(true)
+            .open()?;
+        let image_db = db.open_tree("image")?;
+        let history_db = db.open_tree("history")?;
+        tracing::info!("DB started.");
+        let blob = Arc::new(image_db.clone());
+        let toolset = active_tools
+            .iter()
+            .map(|kind| kind.create_tool(blob.clone()))
+            .fold(ToolSet::builder(), |ts, t| ts.add_tool(t))
+            .build();
         tracing::info!("Active tools: {}", toolset);
         Ok(Self {
             client: Arc::new(client),
-            history: history,
-            image: image,
+            history: history_db,
+            image: image_db,
             toolset: Arc::new(toolset),
         })
+    }
+
+    pub fn get_history_list(&self) -> Vec<ChatMeta> {
+        self.history
+            .iter()
+            .filter_map(|v| v.ok())
+            .filter_map(|(_, v)| serde_json::from_slice::<ChatMeta>(&v).ok())
+            .collect()
+    }
+
+    pub fn get_chat(&self, chat_id: Uuid) -> Result<Option<ChatEntry>, Error> {
+        match self.history.get(chat_id)? {
+            Some(ivec) => Ok(serde_json::from_slice(&ivec)?),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_image(&self, image_id: Uuid) -> Result<Option<Vec<u8>>, Error> {
+        match self.image.get(image_id)? {
+            Some(ivec) => Ok(Some(ivec.to_vec())),
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_chat(&self, chat_id: Uuid) -> Result<(), Error> {
+        if let Some(ivec) = self.history.remove(chat_id)? {
+            if let Ok(entry) = serde_json::from_slice::<ChatEntry>(&ivec) {
+                for msg in entry.messages {
+                    if matches!(msg.owner, Role::Tools | Role::User) {
+                        for content in msg.content {
+                            if let MessageContent::ImageBin(_, img_id, _)
+                            | MessageContent::ImageRef(img_id, _) = content
+                            {
+                                if let Err(e) = self.image.remove(img_id) {
+                                    tracing::error!("Failed to cleanup image {}: {}", img_id, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn save_image(&self, binary: &[u8]) -> Result<Uuid, Error> {

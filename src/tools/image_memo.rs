@@ -10,9 +10,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::blob::BlobStorage;
 use crate::parse_tool_args;
 use crate::tools::FONT_DATA;
-use crate::tools::utils::save_image_to_db;
 use crate::{MessageContent, Tool, ToolDescription};
 
 const MEMO_KEY: &str = "current_session_memo_uuid";
@@ -68,19 +68,18 @@ enum ImageMemoArgs {
 }
 
 pub struct ImageMemoTool {
-    db: sled::Tree,
+    db: Arc<dyn BlobStorage>,
 }
 
 impl ImageMemoTool {
-    pub fn new(ctx: sled::Tree) -> Self {
+    pub fn new(ctx: Arc<dyn BlobStorage>) -> Self {
         Self { db: ctx }
     }
 
     fn get_current_memo(&self) -> Result<RgbaImage, anyhow::Error> {
-        if let Some(uuid_bytes) = self.db.get(MEMO_KEY)? {
-            let uuid_str = String::from_utf8(uuid_bytes.to_vec())?;
-            let uuid = Uuid::from_str(&uuid_str)?;
-            if let Some(img_data) = self.db.get(uuid.as_bytes())? {
+        if let Some(uuid_bytes) = self.db.get_by_key(MEMO_KEY.as_bytes())? {
+            let uuid = Uuid::from_slice(&uuid_bytes)?;
+            if let Some(img_data) = self.db.get(uuid)? {
                 let img = image::load_from_memory(&img_data)?.to_rgba8();
                 return Ok(img);
             }
@@ -93,8 +92,8 @@ impl ImageMemoTool {
         let mut cursor = std::io::Cursor::new(&mut output_buf);
         img.write_to(&mut cursor, image::ImageFormat::Png)?;
 
-        let uuid = save_image_to_db(&self.db, &output_buf)?;
-        self.db.insert(MEMO_KEY, uuid.to_string().as_bytes())?;
+        let uuid = self.db.save(&output_buf)?;
+        self.db.insert(MEMO_KEY.as_bytes(), uuid.as_bytes())?;
         Ok(uuid)
     }
 }
@@ -138,7 +137,7 @@ IMPORTANT: Use coordinate format [x1, y1, x2, y2] for all bounding boxes.
                          return Ok(vec![MessageContent::Text("Error: Read bbox out of bounds.".to_string())]);
                     }
                     let sub_img = image::imageops::crop(&mut memo, x, y, w, h).to_image();
-                    let temp_uuid = save_image_to_db(&self.db, &image_to_bytes(&sub_img)?)?;
+                    let temp_uuid = self.db.save(&image_to_bytes(&sub_img)?)?;
                     return Ok(vec![MessageContent::ImageRef(temp_uuid, "Memo View (Cropped)".to_string())]);
                 }
 
@@ -186,7 +185,7 @@ IMPORTANT: Use coordinate format [x1, y1, x2, y2] for all bounding boxes.
                     },
                     WriteContent::CopyImage(copy_args) => {
                         let src_uuid = Uuid::from_str(&copy_args.img_idx)?;
-                        if let Some(src_data) = self.db.get(src_uuid.as_bytes())? {
+                        if let Some(src_data) = self.db.get(src_uuid)? {
                             let mut src_img = image::load_from_memory(&src_data)?.to_rgba8();
 
                             let sx = copy_args.source_bbox[0] as u32;

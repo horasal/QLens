@@ -3,14 +3,15 @@ use reqwest::header::CONTENT_TYPE;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Deserialize;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::MessageContent;
 use crate::Tool;
 use crate::ToolDescription;
+use crate::blob::BlobStorage;
+use crate::convert_svg_to_png;
 use crate::parse_tool_args;
-use crate::tools::utils::save_image_to_db;
-use crate::tools::utils::save_svg_to_db;
 
 #[derive(Deserialize, JsonSchema)]
 struct FetchArgs {
@@ -45,12 +46,12 @@ enum FetchMethod {
 }
 
 pub struct FetchTool {
-    db: sled::Tree,
+    db: Arc<dyn BlobStorage>,
     client: reqwest::blocking::Client,
 }
 
 impl FetchTool {
-    pub fn new(ctx: sled::Tree) -> Self {
+    pub fn new(ctx: Arc<dyn BlobStorage>) -> Self {
         Self { db: ctx,
             client: reqwest::blocking::Client::builder()
                 .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -150,10 +151,10 @@ impl Tool for FetchTool {
 
             (mime::IMAGE, sub_type) => {
                 let uuid = if sub_type.as_str().to_lowercase().contains("svg") {
-                    save_svg_to_db(&self.db, &res.text()?)?
+                    self.db.save(&convert_svg_to_png(&res.text()?)?)?
                 } else {
                     let bytes = res.bytes()?.to_vec();
-                    save_image_to_db(&self.db, &super::convert_to_png(bytes)?)?
+                    self.db.save(&super::convert_to_png(bytes)?)?
                 };
                 Ok(vec![MessageContent::ImageRef(
                     uuid,
