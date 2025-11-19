@@ -1,5 +1,5 @@
 use crate::blob::{BlobStorage, BlobStorageError};
-use crate::{parse_sourcecode_args};
+use crate::parse_sourcecode_args;
 use crate::{MessageContent, Tool, ToolDescription, tools::FONT_DATA};
 use base64::{Engine, prelude::BASE64_STANDARD};
 use deno_error::JsError;
@@ -15,11 +15,12 @@ use anyhow::{Error, anyhow};
 use deno_core::{JsRuntime, OpState, RuntimeOptions, extension, op2, scope, v8};
 
 #[derive(Deserialize, JsonSchema)]
-pub struct JsInterpreterArgs{
+pub struct JsInterpreterArgs {
     #[schemars(description = "javascript source code")]
-    pub code: String
+    pub code: String,
 }
 
+#[async_trait::async_trait]
 impl Tool for JsInterpreter {
     fn name(&self) -> String {
         "js_interpreter".to_string()
@@ -54,7 +55,7 @@ A V8-based JavaScript sandbox with a **simulated Browser DOM (LinkeDOM)**.
             args_format: "输入必须是一个YAML或JSON对象".to_string(),
         }
     }
-    fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
+    async fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
         let code = parse_sourcecode_args(args)?;
         let ret = self.run_code(&code)?;
         let mut v = vec![MessageContent::Text(serde_json::to_string(&ret)?)];
@@ -144,15 +145,11 @@ fn op_save_svg(state: &mut OpState, #[string] svg_data: &str) -> Result<String, 
 
     pixmap.fill(tiny_skia::Color::TRANSPARENT);
 
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::default(),
-        &mut pixmap.as_mut(),
-    );
+    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
 
-    let output_buf = pixmap.encode_png()
+    let output_buf = pixmap
+        .encode_png()
         .map_err(|_| ImageError::InternalErrorConvertPixMapToPng)?;
-
 
     let db = state.borrow::<DbHandle>();
     match db.0.save(&output_buf) {
@@ -187,7 +184,7 @@ fn op_save_image(state: &mut OpState, #[string] img_base64: String) -> Result<St
                         tracing::warn!("Error to saved image from javascript back to llm, {}.", e)
                     }
                     Ok(uuid.to_string())
-                },
+                }
                 Err(e) => Err(ImageError::DatabaseError(e)),
             }
         }
@@ -212,7 +209,12 @@ fn op_retrieve_image(
 
 extension!(
     sandbox_ext,
-    ops = [console_op_print, op_retrieve_image, op_save_image, op_save_svg],
+    ops = [
+        console_op_print,
+        op_retrieve_image,
+        op_save_image,
+        op_save_svg
+    ],
 );
 
 pub struct JsInterpreter {
@@ -407,7 +409,7 @@ fn test_js_run() {
     println!("{:?}", output);
 
     let output = ci.run_code(
-r##"
+        r##"
 const width = 500;
 const height = 500;
 const svg = d3.create("svg")
@@ -436,6 +438,7 @@ if (!svgString) {
 const base64Svg = btoa(svgString);
 const uuid = save_image(base64Svg);
 console.log(uuid);
-"##);
+"##,
+    );
     println!("{:?}", output);
 }

@@ -46,6 +46,8 @@ impl Default for ChatEntry {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(default = "Uuid::new_v4")]
+    pub id: Uuid,
     pub owner: Role,
     pub reasoning: Vec<MessageContent>,
     pub content: Vec<MessageContent>,

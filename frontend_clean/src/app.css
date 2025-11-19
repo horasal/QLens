@@ -2,7 +2,7 @@
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @plugin "daisyui" {
-  themes: light --default, dark --prefersdark, winter;
+  themes: light --default, dark --prefersdark, winter, dim, lofi;
 }
 @import 'katex/dist/katex.min.css';
 @import 'highlight.js/styles/github.css';

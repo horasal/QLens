@@ -1,7 +1,7 @@
 use crate::blob::BlobStorage;
-use crate::{ImageResizer, parse_tool_args};
 use crate::schema::MessageContent;
 use crate::tools::{FONT_DATA, Tool, ToolDescription};
+use crate::{ImageResizer, parse_tool_args};
 use ab_glyph::PxScale;
 use anyhow::Result;
 use image::{GenericImageView, Pixel, Rgba, RgbaImage, imageops};
@@ -45,6 +45,7 @@ impl BboxDrawTool {
     }
 }
 
+#[async_trait::async_trait]
 impl Tool for BboxDrawTool {
     fn name(&self) -> String {
         "image_draw_bbox_2d_tool".to_string()
@@ -59,10 +60,13 @@ impl Tool for BboxDrawTool {
             args_format: "必须是一个YAML或JSON对象，其中图片必须用其对应的UUID指代。".to_string(),
         }
     }
-    fn call(&self, args: &str) -> Result<Vec<MessageContent>> {
+    async fn call(&self, args: &str) -> Result<Vec<MessageContent>> {
         let args: BboxDrawArgs = parse_tool_args(args)?;
         let id = Uuid::from_str(&args.img_idx)?;
-        let image = self.db.get(id)?.ok_or(anyhow::anyhow!("Image does not exist"))?;
+        let image = self
+            .db
+            .get(id)?
+            .ok_or(anyhow::anyhow!("Image does not exist"))?;
         let cropped_img = draw_bboxes_rgba(&image, &args.bboxes)?;
         let uuid = self.db.save(&cropped_img)?;
         Ok(vec![MessageContent::ImageRef(uuid, "".to_string())])
@@ -70,27 +74,25 @@ impl Tool for BboxDrawTool {
 }
 
 const COLOR_MAP: &[Rgba<u8>] = &[
-    Rgba([255, 0, 0, 255]),     // 1. 红色 (Red)
-    Rgba([0, 255, 0, 255]),     // 2. 绿色 (Green)
-    Rgba([0, 0, 255, 255]),     // 3. 蓝色 (Blue)
-    Rgba([255, 255, 0, 255]),   // 4. 黄色 (Yellow)
-    Rgba([0, 255, 255, 255]),   // 5. 青色 (Cyan)
-    Rgba([255, 0, 255, 255]),   // 6. 品红 (Magenta)
-
-    Rgba([255, 128, 0, 255]),   // 7. 橙色 (Orange)
-    Rgba([128, 0, 255, 255]),   // 8. 紫色 (Purple)
-    Rgba([0, 128, 0, 255]),     // 9. 深绿 (Dark Green)
-    Rgba([0, 128, 128, 255]),   // 10. 蓝绿色 (Teal)
-    Rgba([128, 128, 0, 255]),   // 11. 橄榄色 (Olive)
-    Rgba([255, 0, 128, 255]),   // 12. 玫瑰红 (Rose)
-
-    Rgba([255, 165, 0, 255]),   // 13. 亮橙色 (Bright Orange)
-    Rgba([128, 0, 0, 255]),     // 14. 栗色 (Maroon)
-    Rgba([0, 0, 128, 255]),     // 15. 海军蓝 (Navy)
-    Rgba([170, 110, 40, 255]),  // 16. 棕色 (Brown)
+    Rgba([255, 0, 0, 255]),   // 1. 红色 (Red)
+    Rgba([0, 255, 0, 255]),   // 2. 绿色 (Green)
+    Rgba([0, 0, 255, 255]),   // 3. 蓝色 (Blue)
+    Rgba([255, 255, 0, 255]), // 4. 黄色 (Yellow)
+    Rgba([0, 255, 255, 255]), // 5. 青色 (Cyan)
+    Rgba([255, 0, 255, 255]), // 6. 品红 (Magenta)
+    Rgba([255, 128, 0, 255]), // 7. 橙色 (Orange)
+    Rgba([128, 0, 255, 255]), // 8. 紫色 (Purple)
+    Rgba([0, 128, 0, 255]),   // 9. 深绿 (Dark Green)
+    Rgba([0, 128, 128, 255]), // 10. 蓝绿色 (Teal)
+    Rgba([128, 128, 0, 255]), // 11. 橄榄色 (Olive)
+    Rgba([255, 0, 128, 255]), // 12. 玫瑰红 (Rose)
+    Rgba([255, 165, 0, 255]), // 13. 亮橙色 (Bright Orange)
+    Rgba([128, 0, 0, 255]),   // 14. 栗色 (Maroon)
+    Rgba([0, 0, 128, 255]),   // 15. 海军蓝 (Navy)
+    Rgba([170, 110, 40, 255]), // 16. 棕色 (Brown)
     Rgba([250, 190, 212, 255]), // 17. 粉色 (Pink)
-    Rgba([70, 240, 240, 255]),  // 18. 亮天蓝 (Light Sky Blue)
-    Rgba([245, 130, 48, 255]),  // 19. 杏色 (Apricot)
+    Rgba([70, 240, 240, 255]), // 18. 亮天蓝 (Light Sky Blue)
+    Rgba([245, 130, 48, 255]), // 19. 杏色 (Apricot)
     Rgba([128, 128, 128, 255]), // 20. 灰色 (Gray)
 ];
 
@@ -122,11 +124,13 @@ fn draw_bboxes_rgba(image_data: &[u8], bboxes: &[Bbox]) -> Result<Vec<u8>, anyho
     let mut next_color_index = 0;
 
     for item in bboxes {
-        let color = *label_to_color.entry(item.label.clone().unwrap_or_default()).or_insert_with(|| {
-            let color = COLOR_MAP[next_color_index % COLOR_MAP.len()];
-            next_color_index += 1;
-            color
-        });
+        let color = *label_to_color
+            .entry(item.label.clone().unwrap_or_default())
+            .or_insert_with(|| {
+                let color = COLOR_MAP[next_color_index % COLOR_MAP.len()];
+                next_color_index += 1;
+                color
+            });
 
         // 坐标转换
         let bbox = &item.bbox_2d;
@@ -140,8 +144,10 @@ fn draw_bboxes_rgba(image_data: &[u8], bboxes: &[Bbox]) -> Result<Vec<u8>, anyho
         }
 
         for i in 0..border_thickness {
-            let rect = Rect::at(x1 + i, y1 + i)
-                .of_size((x2 - x1 - 2 * i).max(0) as u32, (y2 - y1 - 2 * i).max(0) as u32);
+            let rect = Rect::at(x1 + i, y1 + i).of_size(
+                (x2 - x1 - 2 * i).max(0) as u32,
+                (y2 - y1 - 2 * i).max(0) as u32,
+            );
             if rect.width() > 0 && rect.height() > 0 {
                 draw_hollow_rect_mut(&mut image_buffer, rect, color);
             }

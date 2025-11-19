@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { renderMarkdown } from '../lib/markdownRenderer';
+    import { renderMarkdown } from '$lib/markdownRenderer';
     import { onDestroy } from 'svelte';
 
     export let content: string = "";
@@ -9,7 +9,7 @@
     let lastContent: string = "";
     let updateScheduled = false;
 
-    $: if (content !== lastContent) {
+    $: if (content !== lastContent || disableImages) {
         scheduleUpdate();
     }
 

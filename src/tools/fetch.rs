@@ -47,22 +47,23 @@ enum FetchMethod {
 
 pub struct FetchTool {
     db: Arc<dyn BlobStorage>,
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
 }
 
 impl FetchTool {
     pub fn new(ctx: Arc<dyn BlobStorage>) -> Self {
         Self { db: ctx,
-            client: reqwest::blocking::Client::builder()
+            client: reqwest::Client::builder()
                 .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .connect_timeout(Duration::from_secs(30))
                 .timeout(Duration::from_secs(40))
                 .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new()),
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 }
 
+#[async_trait::async_trait]
 impl Tool for FetchTool {
     fn name(&self) -> String {
         "curl_url".to_string()
@@ -83,7 +84,7 @@ impl Tool for FetchTool {
         }
     }
 
-    fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
+    async fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
         let args: FetchArgs = parse_tool_args(args)?;
         let mut req_builder = match args.method.unwrap_or(FetchMethod::Get) {
             FetchMethod::Get => self.client.get(&args.url),
@@ -101,7 +102,7 @@ impl Tool for FetchTool {
                     .body(content);
             }
         }
-        let res = req_builder.send()?;
+        let res = req_builder.send().await?;
         let status = res.status();
         if !status.is_success() {
             return Ok(vec![MessageContent::Text(format!(
@@ -130,7 +131,7 @@ impl Tool for FetchTool {
         };
         match (mime_type.type_(), mime_type.subtype()) {
             (mime::TEXT, mime::HTML) => {
-                let html = res.text()?;
+                let html = res.text().await?;
                 let mut skip_tags = vec!["style"];
                 // 除非显式要求保留 script，否则移除
                 if args.keep_script != Some(true) {
@@ -147,13 +148,13 @@ impl Tool for FetchTool {
             (mime::TEXT, _)
             | (mime::APPLICATION, mime::JSON)
             | (mime::APPLICATION, mime::JAVASCRIPT)
-            | (mime::APPLICATION, mime::XML) => Ok(vec![MessageContent::Text(res.text()?)]),
+            | (mime::APPLICATION, mime::XML) => Ok(vec![MessageContent::Text(res.text().await?)]),
 
             (mime::IMAGE, sub_type) => {
                 let uuid = if sub_type.as_str().to_lowercase().contains("svg") {
-                    self.db.save(&convert_svg_to_png(&res.text()?)?)?
+                    self.db.save(&convert_svg_to_png(&res.text().await?)?)?
                 } else {
-                    let bytes = res.bytes()?.to_vec();
+                    let bytes = res.bytes().await?.to_vec();
                     self.db.save(&super::convert_to_png(bytes)?)?
                 };
                 Ok(vec![MessageContent::ImageRef(
@@ -165,11 +166,11 @@ impl Tool for FetchTool {
             _ => {
                 if let Some(suffix) = mime_type.suffix() {
                     if suffix == mime::JSON || suffix == mime::XML {
-                        return Ok(vec![MessageContent::Text(res.text()?)]);
+                        return Ok(vec![MessageContent::Text(res.text().await?)]);
                     }
                 }
 
-                match res.text() {
+                match res.text().await {
                     Ok(text) => Ok(vec![MessageContent::Text(text)]),
                     Err(_) => Ok(vec![MessageContent::Text(format!(
                         "Unsupported Binary Content-Type: {}",

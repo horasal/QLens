@@ -5,7 +5,7 @@ use crate::{
     schema::{Message, MessageContent, Role, ToolUse},
     tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet},
 };
-use anyhow::{Error, anyhow};
+use anyhow::{Error, anyhow, bail};
 use async_openai::types::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
     ChatCompletionRequestAssistantMessageContentPart, ChatCompletionRequestMessageContentPartImage,
@@ -28,6 +28,7 @@ use base64::{Engine, prelude::BASE64_STANDARD};
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use sled::IVec;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -145,11 +146,7 @@ impl<T: Config> Clone for LLMProvider<T> {
 }
 
 impl<T: Config> LLMProvider<T> {
-    pub fn new(
-        client: Client<T>,
-        db_path: &str,
-        active_tools: &[ToolKind],
-    ) -> Result<Self, Error> {
+    pub fn new(client: Client<T>, db_path: &str, active_tools: &[ToolKind]) -> Result<Self, Error> {
         let db = sled::Config::new()
             .temporary(false)
             .path(db_path)
@@ -195,21 +192,23 @@ impl<T: Config> LLMProvider<T> {
         }
     }
 
+    pub fn delete_entry_with_picture(&self, msg: &Message) {
+        for content in msg.content.iter() {
+            if let MessageContent::ImageBin(_, img_id, _) | MessageContent::ImageRef(img_id, _) =
+                content
+            {
+                if let Err(e) = self.image.remove(img_id) {
+                    tracing::error!("Failed to cleanup image {}: {}", img_id, e);
+                }
+            }
+        }
+    }
+
     pub fn delete_chat(&self, chat_id: Uuid) -> Result<(), Error> {
         if let Some(ivec) = self.history.remove(chat_id)? {
             if let Ok(entry) = serde_json::from_slice::<ChatEntry>(&ivec) {
                 for msg in entry.messages {
-                    if matches!(msg.owner, Role::Tools | Role::User) {
-                        for content in msg.content {
-                            if let MessageContent::ImageBin(_, img_id, _)
-                            | MessageContent::ImageRef(img_id, _) = content
-                            {
-                                if let Err(e) = self.image.remove(img_id) {
-                                    tracing::error!("Failed to cleanup image {}: {}", img_id, e);
-                                }
-                            }
-                        }
-                    }
+                    self.delete_entry_with_picture(&msg);
                 }
             }
         }
@@ -244,27 +243,62 @@ impl<T: Config> LLMProvider<T> {
         Err(anyhow!("Unable to generate unique id in 20 tries."))
     }
 
+    pub async fn regenerate_at(
+        &self,
+        chat_id: Uuid,
+        target_id: Uuid,
+        llm_config: LLMConfig,
+        cancel_token: CancellationToken,
+    ) -> Result<impl Stream<Item = Result<ChatEvent, Error>>, Error> {
+        self.truncate_chat_history(chat_id, target_id)?;
+        self.stream_chat_response(chat_id, llm_config, cancel_token)
+            .await
+    }
+
     pub async fn send_chat_message(
         &self,
         chat_id: Uuid,
         user_content: Vec<MessageContent>,
         llm_config: LLMConfig,
+        cancel_token: CancellationToken,
     ) -> Result<impl Stream<Item = Result<ChatEvent, Error>>, Error> {
         let user_message = Message {
+            id: Uuid::new_v4(),
             owner: Role::User,
             content: user_content,
             reasoning: vec![],
             tool_use: vec![],
         };
+        self.append_message(chat_id, user_message)?;
+        self.stream_chat_response(chat_id, llm_config, cancel_token)
+            .await
+    }
+
+    async fn stream_chat_response(
+        &self,
+        chat_id: Uuid,
+        llm_config: LLMConfig,
+        cancel_token: CancellationToken,
+    ) -> Result<impl Stream<Item = Result<ChatEvent, Error>>, Error> {
         let provider = self.clone();
         Ok(try_stream! {
-            let mut current_session = provider.append_message(chat_id, user_message)?;
+            let mut current_session = provider.get_chat(chat_id)?.ok_or(anyhow!("Unexpected empty chat {}", chat_id))?;
             loop {
                 let req_messages = provider.message_to_openai(current_session.clone(), llm_config.parallel_function_call, llm_config.system_prompt_lang);
                 let mut req: CreateChatCompletionRequest = llm_config.clone().into();
                 req.messages = req_messages;
 
-                let mut stream = self.client.chat().create_stream(req).await?;
+                let chat = self.client.chat();
+                let stream_future = chat.create_stream(req);
+                let stream_result = tokio::select! {
+                    res = stream_future => res,
+                    _ = cancel_token.cancelled() => {
+                        tracing::info!("Chat cancelled during stream creation");
+                        return;
+                    }
+                };
+                let mut stream = stream_result?;
+
                 let mut state = StreamParseState::AwaitingDecision;
                             let mut parse_buffer: String = String::new(); // 切换回 String
                             let mut assistant_thinking = String::new();
@@ -435,6 +469,7 @@ impl<T: Config> LLMProvider<T> {
                     }
                 }
                 let assistant_message = Message {
+                        id: Uuid::new_v4(),
                         owner: Role::Assistant,
                         reasoning: {
                             let mut v = vec![];
@@ -476,6 +511,7 @@ impl<T: Config> LLMProvider<T> {
                 }
 
                 let tool_message = Message {
+                    id: Uuid::new_v4(),
                     owner: Role::Tools,
                     content: tool_results_content.into_iter().flat_map(|v| v.content).collect(),
                     reasoning: vec![],
@@ -485,6 +521,38 @@ impl<T: Config> LLMProvider<T> {
                 current_session = provider.append_message(chat_id, tool_message)?;
             }
         })
+    }
+
+    fn truncate_chat_history(&self, chat_id: Uuid, target_id: Uuid) -> Result<(), Error> {
+        let mut entry = self
+            .get_chat(chat_id)?
+            .ok_or(anyhow!("Can not found chat {} from database.", chat_id))?;
+
+        if let Some(index) = entry.messages.iter().position(|m| m.id == target_id) {
+            let keep_count = if entry.messages[index].owner == Role::User {
+                index + 1
+            } else {
+                index
+            };
+
+            // 2. 清理“界限之后”的所有图片资源
+            // 这样就绝对不会误删 User 自己的图片了
+            for msg in entry.messages.iter().skip(keep_count) {
+                self.delete_entry_with_picture(msg);
+            }
+            entry.messages.truncate(keep_count);
+
+            if entry.messages.is_empty() {
+                bail!("Unexpected regeneration {} from starting", chat_id);
+            }
+
+            //TODO this should be replaced with compare_and_swap
+            self.history
+                .insert(chat_id.as_bytes(), serde_json::to_vec(&entry)?)?;
+        } else {
+            tracing::warn!("Target message {} not found in chat {}", target_id, chat_id);
+        }
+        Ok(())
     }
 
     #[allow(dead_code)]

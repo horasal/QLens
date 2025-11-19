@@ -1,9 +1,9 @@
 use crate::{blob::BlobStorage, schema::*};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
-use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 use std::{collections::HashMap, sync::Arc};
-
+use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
+use uuid::Uuid;
 
 mod prompt_template;
 
@@ -28,7 +28,9 @@ pub use utils::*;
 #[allow(dead_code)]
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Display, EnumIter, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, Display, EnumIter, Serialize, Deserialize,
+)]
 #[strum(serialize_all = "snake_case")]
 pub enum ToolKind {
     #[strum(serialize = "zoom_in")]
@@ -71,10 +73,11 @@ pub struct ToolDescription {
     pub args_format: String,           // 例如: "此工具的输入应为JSON对象。"
 }
 
+#[async_trait::async_trait]
 pub trait Tool {
     fn name(&self) -> String;
     fn description(&self) -> ToolDescription;
-    fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error>;
+    async fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error>;
 
     fn get_function_description(&self) -> String {
         let desc = self.description();
@@ -143,23 +146,15 @@ impl ToolSet {
     }
 
     pub async fn use_tool_async(&self, tool_name: String, args: String) -> Message {
-        self.use_tool(&tool_name, &args)
-    }
-
-    pub fn use_tool(&self, tool_name: &str, args: &str) -> Message {
-        let result_content = match self.tools.get(tool_name) {
+        let result_content = match self.tools.get(&tool_name) {
             None => {
-                // 错误处理：工具未找到
                 let error_msg = format!("错误：未找到名为 '{}' 的工具。", tool_name);
                 vec![MessageContent::Text(error_msg)]
             }
             Some(tool) => {
-                // 找到工具，执行它
-                match tool.call(args) {
-                    // 工具成功执行
+                // 修改：这里需要 .await
+                match tool.call(&args).await {
                     Ok(content) => content,
-
-                    // 错误处理：工具执行失败
                     Err(e) => {
                         let error_msg = format!("工具 '{}' 执行失败：{}", tool_name, e);
                         vec![MessageContent::Text(error_msg)]
@@ -168,13 +163,12 @@ impl ToolSet {
             }
         };
 
-        // 无论成功还是失败，都打包成一个 Message 返回
-        // LLM 需要这个结果（无论是数据还是错误信息）来继续下一步
         Message {
+            id: Uuid::new_v4(),
             owner: Role::Tools,
             content: result_content,
-            reasoning: vec![], // 工具结果没有 reasoning
-            tool_use: vec![],  // 这不是一个 "tool_use" 动作，而是 "tool_use" 的结果
+            reasoning: vec![],
+            tool_use: vec![],
         }
     }
 
@@ -209,10 +203,12 @@ impl ToolSet {
             .replace("{FN_ARGS}", FN_ARGS)
             .replace("{FN_RESULT}", FN_RESULT)
             .replace("{FN_EXIT}", FN_EXIT);
-        let assistant_prompt = templates.assistant_desc_template
-            .replace("{CURRENT_DATE}", &chrono::Local::now().format("%Y-%m-%d").to_string());
+        let assistant_prompt = templates.assistant_desc_template.replace(
+            "{CURRENT_DATE}",
+            &chrono::Local::now().format("%Y-%m-%d").to_string(),
+        );
 
-        format!( r##"{}\n{}\n\n{}"##, assistant_prompt, tool_info, tool_fmt)
+        format!(r##"{}\n{}\n\n{}"##, assistant_prompt, tool_info, tool_fmt)
     }
 }
 

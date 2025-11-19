@@ -31,11 +31,13 @@ resvg = "0.45"
 whatlang = "0.18"
 deno_core = "0.368.0"
 deno_error = "0.7.0"
-reqwest = { version = "0.12.24", features = ["blocking"] }
+reqwest = { version = "0.12.24", features = ["json", "stream", "multipart"] }
 htmd = "0.4.0"
 mime = "0.3.17"
 strum = { version = "0.27.2", features = ["derive"] }
 serde_yaml = "0.9.34"
+tokio-util = "0.7.17"
+async-trait = "0.1.89"
 
 [profile.release]
 strip = true

@@ -7,18 +7,16 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::blob::BlobStorage;
-use crate::{ImageResizer, parse_tool_args};
 use crate::schema::MessageContent;
 use crate::tools::{Tool, ToolDescription};
+use crate::{ImageResizer, parse_tool_args};
 use anyhow::{Error, anyhow};
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
 #[derive(Deserialize, JsonSchema)]
 struct ZoomArgs {
-    #[schemars(
-        description = "list bounding boxes, each will generated a zoomed image"
-    )]
+    #[schemars(description = "list bounding boxes, each will generated a zoomed image")]
     bbox_list: Vec<Bbox2d>,
     #[schemars(description = "The local uuid of input image")]
     img_idx: String,
@@ -27,7 +25,7 @@ struct ZoomArgs {
 #[derive(Deserialize, JsonSchema)]
 struct Bbox2d {
     #[schemars(
-        description = "The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right cornerrelative coordinates.",
+        description = "The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right cornerrelative coordinates."
     )]
     bbox_2d: [f64; 4],
 
@@ -45,6 +43,7 @@ impl ZoomInTool {
     }
 }
 
+#[async_trait::async_trait]
 impl Tool for ZoomInTool {
     fn name(&self) -> String {
         "image_zoom_in_tool".to_string()
@@ -59,7 +58,7 @@ impl Tool for ZoomInTool {
             args_format: "必须是一个YAML或JSON对象，其中图片必须用其对应的UUID指代。".to_string(),
         }
     }
-    fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error> {
+    async fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error> {
         let args: ZoomArgs = parse_tool_args(args)?;
         let id = Uuid::from_str(&args.img_idx)?;
         let mut v = Vec::new();
@@ -73,7 +72,10 @@ impl Tool for ZoomInTool {
             };
             let cropped_img = image_zoom_in(&image, bbox)?;
             let uuid = self.db.save(&cropped_img)?;
-            v.push(MessageContent::ImageRef(uuid, b.label.unwrap_or("".to_string())));
+            v.push(MessageContent::ImageRef(
+                uuid,
+                b.label.unwrap_or("".to_string()),
+            ));
         }
         Ok(v)
     }

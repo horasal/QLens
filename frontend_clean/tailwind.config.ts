@@ -1,16 +1,16 @@
-import type { Config } from 'tailwindcss'
-import typography from '@tailwindcss/typography'
-import daisyui from 'daisyui'
+import type { Config } from 'tailwindcss';
+import typography from '@tailwindcss/typography';
+import daisyui from 'daisyui';
 
 export default {
-  content: ['./src/**/*.{html,js,svelte,ts}'],
-  theme: {
-    extend: {},
-  },
+	content: ['./src/**/*.{html,js,svelte,ts}'],
+	theme: {
+		extend: {}
+	},
 
-  plugins: [
-    typography,
-    daisyui
-  ],
-
-} satisfies Config
+	plugins: [typography, daisyui],
+	daisyui: {
+		themes: ['lofi', 'dim'],
+		darkTheme: 'dim'
+	}
+} satisfies Config;

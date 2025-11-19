@@ -23,9 +23,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
             tool_info_template: r###" 工具
 ## 你拥有如下工具：
 {tool_descs}"###,
-            parallel_call_template:
-r###"## 你可以在回复中插入零次、一次或多次以下命令以调用工具用来帮助你回答。
+            parallel_call_template: r###"## 你可以在回复中插入零次、一次或多次以下命令以调用工具用来帮助你回答。
 你可以进行一轮或多轮工具使用，每轮工具调用的结果一定会自动返回给你并开启新一轮对话，你可以在后续的对话中利用这些历史结果。
+工具的参数必须是真实有效的内容。
 
 ### 思维流程示例：
 用户要求：根据北京和上海的天气指定最便宜的出行计划。
@@ -54,9 +54,9 @@ r###"## 你可以在回复中插入零次、一次或多次以下命令以调用
 {FN_RESULT} 工具2返回结果
 1. **检查正确性**：如果不符合预期，请分析原因并尝试修改参数重试
 2. **回复用户或进一步行动**：基于工具结果进行行动。"###,
-            single_call_template:
-r###"## 你可以在回复中插入零次、一次或多次以下命令以调用工具用来帮助你理解内容，或者展示给用户。
+            single_call_template: r###"## 你可以在回复中插入零次、一次或多次以下命令以调用工具用来帮助你理解内容，或者展示给用户。
 你可以进行一轮或多轮工具使用，每轮工具调用的结果一定会自动返回给你并开启新一轮对话，你可以在后续的对话中利用这些历史结果。
+工具的参数必须是真实有效的内容。
 
 ## 思维流程示例
 用户要求：标记博客图里的人脸 (URL已知)。
@@ -102,8 +102,7 @@ r###"## 你可以在回复中插入零次、一次或多次以下命令以调用
             tool_info_template: r###" ツール
 ## 利用可能ツール：
 {tool_descs}"###,
-            parallel_call_template:
-r###"## 回答を助けるために、ツール呼び出しコマンドを挿入できます。
+            parallel_call_template: r###"## 回答を助けるために、ツール呼び出しコマンドを挿入できます。
 ツール呼び出しは複数ターン可能です。各ターンの結果は自動的に返され、次の対話ターンが開始されます。履歴を利用して対話を継続します。
 
 ### 思考プロセス例：
@@ -133,8 +132,7 @@ r###"## 回答を助けるために、ツール呼び出しコマンドを挿入
 {FN_RESULT} ツール2結果
 1. **正当性チェック**：期待通りでない場合、原因を分析しパラメータを修正して再試行。
 2. **ユーザーへの回答または次の行動**：結果に基づいて行動。"###,
-            single_call_template:
-r###"## 内容理解やユーザー提示のために、ツール呼び出しコマンドを挿入できます。
+            single_call_template: r###"## 内容理解やユーザー提示のために、ツール呼び出しコマンドを挿入できます。
 ツール呼び出しは複数ターン可能です。各ターンの結果は自動的に返され、次の対話ターンが開始されます。履歴を利用して対話を継続します。
 
 ## 思考プロセス例
@@ -181,8 +179,7 @@ r###"## 内容理解やユーザー提示のために、ツール呼び出しコ
             tool_info_template: r###" 도구
 ## 사용 가능 도구:
 {tool_descs}"###,
-            parallel_call_template:
-r###"## 답변을 돕기 위해 도구 호출 명령을 삽입할 수 있습니다.
+            parallel_call_template: r###"## 답변을 돕기 위해 도구 호출 명령을 삽입할 수 있습니다.
 도구 사용은 여러 턴에 걸쳐 진행될 수 있으며, 각 턴의 결과는 자동으로 반환되어 새로운 대화가 시작됩니다. 이후 대화에서 이 기록을 활용할 수 있습니다.
 
 ### 사고 과정 예시:
@@ -212,8 +209,7 @@ r###"## 답변을 돕기 위해 도구 호출 명령을 삽입할 수 있습니�
 {FN_RESULT} 도구 2 결과
 1. **정확성 확인**: 결과가 예상과 다르면 원인을 분석하고 매개변수를 수정하여 재시도.
 2. **답변 또는 추가 행동**: 도구 결과를 바탕으로 행동."###,
-            single_call_template:
-r###"## 내용 이해나 사용자 제시를 위해 도구 호출 명령을 삽입할 수 있습니다.
+            single_call_template: r###"## 내용 이해나 사용자 제시를 위해 도구 호출 명령을 삽입할 수 있습니다.
 도구 사용은 여러 턴에 걸쳐 진행될 수 있으며, 각 턴의 결과는 자동으로 반환되어 새로운 대화가 시작됩니다. 이후 대화에서 이 기록을 활용할 수 있습니다.
 
 ## 사고 과정 예시
@@ -260,8 +256,7 @@ Current Date: {CURRENT_DATE}
             tool_info_template: r###" Tools
 ## Available Tools:
 {tool_descs}"###,
-            parallel_call_template:
-r###"## You can insert zero, one, or multiple commands to call tools to help you answer.
+            parallel_call_template: r###"## You can insert zero, one, or multiple commands to call tools to help you answer.
 Tool usage can span one or multiple turns. Results from each turn are automatically returned to you, starting a new dialogue turn where you can use this history.
 
 ### Thought Process Example:
@@ -291,8 +286,7 @@ User: Plan the cheapest trip based on weather in Beijing and Shanghai.
 {FN_RESULT} Tool 2 Result
 1. **Check Correctness**: If unexpected, analyze why and retry with modified parameters.
 2. **Reply or Act**: Proceed based on tool results."###,
-            single_call_template:
-r###"## You can insert zero, one, or multiple commands to call tools to help you understand content or show it to the user.
+            single_call_template: r###"## You can insert zero, one, or multiple commands to call tools to help you understand content or show it to the user.
 Tool usage can span one or multiple turns. Results from each turn are automatically returned to you, starting a new dialogue turn where you can use this history.
 
 ## Thought Process Example
