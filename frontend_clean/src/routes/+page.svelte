@@ -235,7 +235,7 @@
 			console.log('WebSocket connected');
 			wsReconnecting = false;
 			reconnectInterval = 1000;
-			if (!(currentChat && !processingChatIds.has(currentChat.id))) loadChat(currentChat.id);
+			if (currentChat && !processingChatIds.has(currentChat.id)) loadChat(currentChat.id);
 		};
 
 		ws.onclose = (e) => {
