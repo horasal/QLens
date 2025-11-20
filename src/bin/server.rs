@@ -398,6 +398,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             ClientRequest::Abort { request_id, chat_id } => {
                                 tracing::info!("Abort request received for req: {}, chat: {}", request_id, chat_id);
                                 if let Some(control) = tasks.remove(&request_id) {
+                                    control.token.cancel();
                                     control.abort.abort();
                                 }
                             }

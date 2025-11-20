@@ -49,15 +49,27 @@ pub fn parse_sourcecode_args(input: &str) -> Result<String, anyhow::Error> {
     if is_code_block {
         Ok(clean_input.to_string())
     } else {
-        parse_tool_args::<JsInterpreterArgs>(input).map(|s| s.code)
+        match parse_tool_args::<JsInterpreterArgs>(input) {
+            Ok(s) => Ok(s.0),
+            Err(_) => Ok(strip_yaml_lead_bar(input).to_string()),
+        }
+    }
+}
+
+pub fn strip_yaml_lead_bar(input: &str) -> &str {
+    let clean_input = input.trim_start();
+    if clean_input.starts_with('|') || clean_input.starts_with('>') {
+        clean_input.trim_start_matches('|').trim_start_matches('>').trim_start()
+    } else {
+        input
     }
 }
 
 pub fn parse_tool_args<T: DeserializeOwned>(input: &str) -> Result<T, anyhow::Error> {
-    let clean_input = input;
-    if let Ok(json_result) = serde_json::from_str::<T>(clean_input) {
+    if let Ok(json_result) = serde_json::from_str::<T>(input) {
         return Ok(json_result);
     }
+    let clean_input = strip_yaml_lead_bar(input);
     match serde_yaml::from_str::<T>(clean_input) {
         Ok(yaml_result) => Ok(yaml_result),
         Err(e) => {

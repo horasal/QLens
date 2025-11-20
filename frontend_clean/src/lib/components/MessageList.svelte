@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { currentChat, isLoading, processingChatIds } from '$lib/stores/chatStore';
-	import * as ChatService from '$lib/services/chatService'
+	import * as ChatService from '$lib/services/chatService';
 	import { _ } from 'svelte-i18n';
 	import MarkdownBlock from './MarkdownBlock.svelte'; // 假设你已分离
 	import { createEventDispatcher, tick, afterUpdate } from 'svelte';
@@ -49,14 +49,30 @@
 
 	// 监听消息变化自动滚动
 	let lastMsgCount = 0;
-	$: if ($currentChat?.messages.length !== lastMsgCount) {
-		lastMsgCount = $currentChat?.messages.length || 0;
-		setTimeout(() => scrollToBottom(), 50);
+	let lastContentLength = 0;
+	$: {
+		if ($currentChat) {
+			const msgs = $currentChat.messages;
+			const lastMsg = msgs[msgs.length - 1];
+
+			// 计算最后一条消息的正文长度 (忽略 reasoning)
+			let currentContentLength = 0;
+			if (lastMsg && lastMsg.owner === 'Assistant') {
+				currentContentLength = lastMsg.content.reduce(
+					(acc, item) => acc + ('Text' in item ? item.Text.length : 0),
+					0
+				);
+			}
+
+			if (msgs.length !== lastMsgCount || currentContentLength !== lastContentLength) {
+				lastMsgCount = msgs.length;
+				lastContentLength = currentContentLength;
+
+				// 稍微延时一点，等待 DOM 渲染
+				setTimeout(() => scrollToBottom(autoScrollEnabled), 50);
+			}
+		}
 	}
-	// 监听内容变化(流式)也滚动
-	afterUpdate(() => {
-		if (autoScrollEnabled) scrollToBottom();
-	});
 
 	function onImageClick(src: string) {
 		dispatch('imageClick', src);
@@ -76,6 +92,20 @@
 			}
 			return;
 		}
+	}
+
+	function scrollToBottomAction(node: HTMLElement, text: string | undefined) {
+		const scroll = () => {
+			node.scrollTop = node.scrollHeight;
+		};
+
+		scroll();
+
+		return {
+			update(newText: string) {
+				scroll();
+			}
+		};
 	}
 
 	function copyRawMessage(text: string) {
@@ -190,20 +220,40 @@
 
 						<div class="min-w-0 flex-1 space-y-2">
 							{#if message.reasoning.length > 0}
+								{@const reasoningText = message.reasoning
+									.map((r) => ('Text' in r ? r.Text : ''))
+									.join('')}
+
 								<details
 									class="group/think bg-base-50 collapse-arrow collapse rounded-lg border border-base-200"
+									open={message.content.length === 0}
 								>
 									<summary
-										class="collapse-title min-h-0 py-2 text-xs font-medium text-base-content/60"
+										class="collapse-title min-h-0 py-2 text-xs font-medium text-base-content/60 transition-colors hover:text-primary"
 									>
-										{$_('show_thinking')}
-									</summary>
-									<div class="collapse-content text-xs text-base-content/70">
-										{#each message.reasoning as item}
-											{#if 'Text' in item}
-												<MarkdownBlock content={item.Text} disableImages />
+										<div class="flex items-center gap-2">
+											{$_('show_thinking')}
+											{#if message.content.length === 0 && message.tool_use.length == 0}
+												<span class="loading loading-xs loading-dots opacity-50"></span>
 											{/if}
-										{/each}
+										</div>
+									</summary>
+
+									<div class="collapse-content">
+										<div
+											class="max-h-96 overflow-y-auto rounded-md bg-base-200/30 p-2 text-xs text-base-content/70"
+											use:scrollToBottomAction={reasoningText}
+										>
+											{#each message.reasoning as item}
+												{#if 'Text' in item}
+													<div class="prose-xs prose max-w-none">
+														<MarkdownBlock content={item.Text} disableImages />
+													</div>
+												{/if}
+											{/each}
+
+											<div class="h-2"></div>
+										</div>
 									</div>
 								</details>
 							{/if}
@@ -212,30 +262,72 @@
 								<div class="my-2">
 									{#if message.tool_use.length > 0}
 										{#each message.tool_use as tool}
-											<div
-												class="inline-flex items-center gap-2 rounded-full border border-base-300 bg-base-200 px-3 py-1.5 font-mono text-xs text-base-content/80"
-											>
-												<svg
-													xmlns="http://www.w3.org/2000/svg"
-													viewBox="0 0 20 20"
-													fill="currentColor"
-													class="h-3 w-3"
+											<div class="dropdown dropdown-start dropdown-bottom">
+												<div
+													tabindex="0"
+													role="button"
+													class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-base-300 bg-base-200 px-3 py-1.5 font-mono text-xs text-base-content/80 transition-colors hover:border-secondary hover:text-secondary"
 												>
-													<path
-														fill-rule="evenodd"
-														d="M19 5.5a4.5 4.5 0 01-4.791 4.483c-.353.048-.709.09-1.07.126V12.5c0 .414-.336.75-.75.75h-1.5a.75.75 0 01-.75-.75v-3.086a6.009 6.009 0 01-2.132-1.414l-.259.26a1.475 1.475 0 002.085 2.084l.515-.515a.75.75 0 111.06 1.06l-.515.515a2.975 2.975 0 01-4.206-4.206l.515-.515a.75.75 0 011.06 1.06l-.515.515a1.475 1.475 0 002.085 2.084l.26-.258a6.003 6.003 0 01-3.087-2.132H4.25a.75.75 0 01-.75-.75v-1.5c0-.414.336-.75.75-.75h3.086c.047-.36.089-.716.126-1.07A4.483 4.483 0 0112.5 1H14.5A4.5 4.5 0 0119 5.5z"
-														clip-rule="evenodd"
-													/>
-												</svg>
-												Using: <span class="font-bold">{tool.function_name}</span>
+													<svg
+														xmlns="http://www.w3.org/2000/svg"
+														viewBox="0 0 20 20"
+														fill="currentColor"
+														class="h-3 w-3"
+													>
+														<path
+															fill-rule="evenodd"
+															d="M19 5.5a4.5 4.5 0 01-4.791 4.483c-.353.048-.709.09-1.07.126V12.5c0 .414-.336.75-.75.75h-1.5a.75.75 0 01-.75-.75v-3.086a6.009 6.009 0 01-2.132-1.414l-.259.26a1.475 1.475 0 002.085 2.084l.515-.515a.75.75 0 111.06 1.06l-.515.515a2.975 2.975 0 01-4.206-4.206l.515-.515a.75.75 0 011.06 1.06l-.515.515a1.475 1.475 0 002.085 2.084l.26-.258a6.003 6.003 0 01-3.087-2.132H4.25a.75.75 0 01-.75-.75v-1.5c0-.414.336-.75.75-.75h3.086c.047-.36.089-.716.126-1.07A4.483 4.483 0 0112.5 1H14.5A4.5 4.5 0 0119 5.5z"
+															clip-rule="evenodd"
+														/>
+													</svg>
+													<span class="font-bold">{tool.function_name}</span>
+												</div>
+												<div
+													tabindex="0"
+													class="dropdown-content z-[100] mt-1 w-80 rounded-box border border-base-300 bg-base-100 p-2 shadow-xl sm:w-96"
+												>
+													<div class="flex flex-col gap-1 p-2">
+														<div class="text-xs font-bold text-base-content/60">Arguments</div>
+														<pre
+															class="max-h-60 overflow-y-auto rounded bg-base-200/50 p-2 font-mono text-xs break-words whitespace-pre-wrap text-primary">{formatToolArgs(
+																tool.args
+															)}</pre>
+													</div>
+												</div>
 											</div>
 										{/each}
 									{:else}
-										<div
-											class="inline-flex animate-pulse items-center gap-2 rounded-full bg-base-200 px-3 py-1.5 text-xs text-base-content/60"
-										>
-											<span class="loading loading-xs loading-dots"></span>
-											Calling tools...
+										<div class="group relative inline-block">
+											<div
+												class="inline-flex animate-pulse items-center gap-2 rounded-full bg-base-200 px-3 py-1.5 text-xs text-base-content/60"
+											>
+												<span class="loading loading-xs loading-dots"></span>
+												Calling tools...
+											</div>
+											{#if message.tool_deltas && message.tool_deltas.length > 0}
+												<div
+													class="pointer-events-none absolute top-full left-0 z-50 mt-2 w-64 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 sm:w-80"
+												>
+													<div
+														class="rounded-lg border border-base-300 bg-base-100 p-3 text-xs shadow-xl"
+													>
+														<div class="mb-1 font-bold text-base-content/60">Live Output</div>
+
+														<div
+															class="max-h-40 overflow-y-auto font-mono break-all whitespace-pre-wrap opacity-70"
+															style="scrollbar-width: none; -ms-overflow-style: none;"
+															use:scrollToBottomAction={message.tool_deltas}
+														>
+															<style>
+																div::-webkit-scrollbar {
+																	display: none;
+																}
+															</style>
+															{message.tool_deltas}
+														</div>
+													</div>
+												</div>
+											{/if}
 										</div>
 									{/if}
 								</div>
