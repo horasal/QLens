@@ -4772,6 +4772,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5e8f38b596e2a359b755342473520a99421e43658548c79489ee221b728c107"
 dependencies = [
  "hashbrown 0.15.5",
+ "serde",
 ]
 
 [[package]]

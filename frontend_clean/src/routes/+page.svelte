@@ -15,6 +15,8 @@
 	// 引入服务和状态
 	import * as ChatService from '$lib/services/chatService';
 	import { isDragging, isLoading as isGlobalLoading } from '$lib/stores/chatStore';
+	import SettingsModal from '$lib/components/SettingsModal.svelte';
+	import { showSettings } from '$lib/stores/settingsStore';
 
 	initI18n();
 
@@ -68,6 +70,7 @@
 	</div>
 {:else}
 	<ImageModal src={modalImageUrl} on:close={() => (modalImageUrl = null)} />
+	<SettingsModal bind:show={$showSettings} />
 
 	<div class="drawer lg:drawer-open">
 		<input id="my-drawer" type="checkbox" class="drawer-toggle" />

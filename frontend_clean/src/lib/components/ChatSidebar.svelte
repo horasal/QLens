@@ -3,18 +3,21 @@
 	import * as ChatService from '$lib/services/chatService';
 	import { _ } from 'svelte-i18n';
 	import { onMount } from 'svelte';
+	import { showSettings } from '$lib/stores/settingsStore';
 
 	let isDark = false;
 
 	onMount(() => {
-		const currentTheme = document.documentElement.getAttribute('data-theme');
-		isDark = currentTheme === 'dim';
-		document.documentElement.setAttribute('data-theme', savedTheme);
+		const savedTheme = localStorage.getItem('theme');
+		if (savedTheme) {
+			isDark = savedTheme === 'dim';
+		} else {
+			isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+		}
 	});
 
 	$: {
 		if (typeof document !== 'undefined') {
-			// 防止 SSR 报错
 			const theme = isDark ? 'dim' : 'lofi';
 			document.documentElement.setAttribute('data-theme', theme);
 			localStorage.setItem('theme', theme);
@@ -25,6 +28,7 @@
 		e.stopPropagation();
 		ChatService.deleteChat(id);
 	}
+
 </script>
 
 <div class="drawer-side z-20">
@@ -68,6 +72,29 @@
 					</li>
 				{/each}
 			</ul>
+		</div>
+		<div class="mt-auto px-2">
+			<button
+				class="btn w-full justify-start gap-3 text-base-content/70 btn-ghost hover:bg-base-300 hover:text-base-content"
+				on:click={() => $showSettings = true}
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					class="h-5 w-5"
+				>
+					<path
+						d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+					></path>
+					<circle cx="12" cy="12" r="3"></circle>
+				</svg>
+				<span class="font-medium">Settings</span>
+			</button>
 		</div>
 		<div class="mt-2 border-t border-base-300 pt-4">
 			<label

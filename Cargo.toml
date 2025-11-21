@@ -28,7 +28,7 @@ tower-http = { version = "0.6", features = ["cors", "fs", "limit","compression-g
 rust-embed = { version = "8.9", features = ["axum"] }
 mime_guess = "2.0"
 resvg = "0.45"
-whatlang = "0.18"
+whatlang = { version = "0.18", features = ["serde"] }
 deno_core = "0.368.0"
 deno_error = "0.7.0"
 reqwest = { version = "0.12.24", features = ["json", "stream", "multipart"] }

@@ -3,8 +3,9 @@
 	import * as ChatService from '$lib/services/chatService';
 	import { _ } from 'svelte-i18n';
 	import MarkdownBlock from './MarkdownBlock.svelte'; // 假设你已分离
-	import { createEventDispatcher, tick, afterUpdate } from 'svelte';
+	import { createEventDispatcher, tick } from 'svelte';
 	import type { MessageContent } from '$lib/types';
+	import { toasts } from '$lib/stores/chatStore';
 
 	const dispatch = createEventDispatcher();
 	let chatContainer: HTMLElement;
@@ -80,17 +81,34 @@
 
 	function handleContainerClick(e: MouseEvent) {
 		const target = e.target as HTMLElement;
+		const btn = target.closest('.copy-code-btn') as HTMLButtonElement;
 
-		// 1. 处理代码块复制
-		if (target.classList.contains('copy-code-btn')) {
-			// 找到同级的 pre > code 元素
-			const container = target.closest('.relative');
-			const codeBlock = container?.querySelector('code');
+		if (btn) {
+			const container = btn.closest('.code-card');
+			if (!container) return;
+
+			const codeBlock = container.querySelector('code');
+
 			if (codeBlock && codeBlock.textContent) {
 				navigator.clipboard.writeText(codeBlock.textContent);
-				toasts.show('Code copied!', 'success', 1000);
+
+				const originalHTML = btn.innerHTML;
+				btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+				toasts.show('Copied!', 'success', 1000);
+
+				setTimeout(() => {
+					btn.innerHTML = originalHTML;
+				}, 2000);
 			}
 			return;
+		}
+
+		if (target.tagName === 'IMG') {
+			const src = target.getAttribute('src');
+			if (src) {
+				onImageClick(src);
+			}
 		}
 	}
 
@@ -118,6 +136,7 @@
 	class="flex-1 overflow-y-auto bg-base-100 p-4 md:p-6"
 	bind:this={chatContainer}
 	on:scroll={handleScroll}
+	on:click={handleContainerClick}
 >
 	{#if $isLoading && !$currentChat}
 		<div class="flex h-full items-center justify-center">

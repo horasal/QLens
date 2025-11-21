@@ -20,6 +20,7 @@ import type {
     UploadImageResponse,
     PreviewFile
 } from '../types';
+import { settings } from '$lib/stores/settingsStore';
 
 // --- 局部状态 (不需要 UI 响应的) ---
 let ws: WebSocket | null = null;
@@ -305,13 +306,11 @@ export async function sendMessage(text: string, files: PreviewFile[]) {
     const curr = get(currentChat) || (await startNewChat().then(() => get(currentChat)));
     if (!curr) return;
 
-    // 1. 标记开始
     processingChatIds.add(curr.id);
     const requestId = self.crypto.randomUUID();
     activeRequestIds.set(curr.id, requestId);
 
     try {
-        // 2. 上传图片 (如有)
         let imageRefs: MessageContent[] = [];
         if (files.length > 0) {
             const formData = new FormData();
@@ -324,7 +323,6 @@ export async function sendMessage(text: string, files: PreviewFile[]) {
             imageRefs = uploaded.map(r => ({ ImageRef: [r.uuid, r.file] }));
         }
 
-        // 3. 构造消息
         const textContent: MessageContent[] = text.trim() ? [{ Text: text.trim() }] : [];
         const fullContent = [...imageRefs, ...textContent];
 
@@ -335,21 +333,29 @@ export async function sendMessage(text: string, files: PreviewFile[]) {
             tool_use: []
         };
 
-        // 4. 乐观更新 UI
         currentChat.update(c => {
             if(c) c.messages = [...c.messages, userMsg];
             return c;
         });
 
-        // 5. 发送 WebSocket
         if (!(await waitForConnection())) throw new Error('Connection timeout');
+
+        const currentSettings = get(settings);
 
         const payload: ClientRequest = {
             type: 'Chat',
             payload: {
                 request_id: requestId,
                 chat_id: curr.id,
-                content: fullContent
+                content: fullContent,
+                config: {
+                  model: currentSettings.model,
+                  temp: currentSettings.temperature,
+                  custom_system_prompt: currentSettings.customSystemPrompt,
+                  max_completion_tokens: currentSettings.maxTokens,
+                  top_p: currentSettings.topP,
+                  parallel_function_call: currentSettings.parallelFunctionCall,
+                }
             }
         };
         ws?.send(JSON.stringify(payload));

@@ -7,48 +7,71 @@ import hljs from 'highlight.js';
 const md = markdownit({
 	html: false,
 	linkify: true,
-	breaks: true,
-	highlight: (str, lang) => {
-		// 生成高亮代码
-		let highlightedCode = '';
-		if (lang && hljs.getLanguage(lang)) {
-			try {
-				highlightedCode = hljs.highlight(str, { language: lang, ignoreIllegals: true }).value;
-			} catch (__) {}
-		}
-		if (!highlightedCode) {
-			highlightedCode = md.utils.escapeHtml(str);
-		}
-
-		return `
-        <div class="relative group/code my-4">
-          <div class="absolute right-2 top-2 opacity-0 transition-opacity group-hover/code:opacity-100 z-10">
-              <button class="btn btn-xs btn-square btn-ghost bg-base-100/80 hover:bg-base-100 copy-code-btn" title="Copy code">
-                  <span class="icon-[lucide--copy] w-4 h-4 pointer-events-none"></span>
-              </button>
-          </div>
-          <pre class="hljs p-4 rounded-lg text-sm overflow-x-auto bg-[#0d1117] text-[#c9d1d9]"><div class="flex justify-between items-center mb-1 text-xs text-gray-500 select-none"><span>${lang || 'text'}</span></div><code>${highlightedCode}</code></pre>
-        </div>
-      `;
-	}
+	breaks: true
 });
 
 md.use(markdownItKatex);
 
-// 安全链接：强制所有链接在新标签页打开，并添加 noopener
+// 链接安全配置
 md.use(markdownItLinkAttributes, {
 	attrs: {
 		target: '_blank',
 		rel: 'noopener noreferrer',
-		class: 'link link-primary hover:underline' // 使用 DaisyUI 的 link 样式
+		class: 'link link-primary hover:underline'
 	}
 });
 
-type RenderOptions = {
-	disableImages?: boolean;
+// 1. 【核心修复】完全重写代码块渲染规则 (fence)
+// 这能避免外层被套上多余的 <pre> 标签
+md.renderer.rules.fence = function (tokens, idx, options, env, self) {
+	const token = tokens[idx];
+	const info = token.info ? md.utils.unescapeAll(token.info).trim() : '';
+	const [lang] = info.split(/\s+/);
+	const code = token.content;
+
+	let highlightedCode = '';
+
+	// 高亮逻辑
+	if (lang && hljs.getLanguage(lang)) {
+		try {
+			highlightedCode = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+		} catch (__) {}
+	}
+	// 兜底转义
+	if (!highlightedCode) {
+		highlightedCode = md.utils.escapeHtml(code);
+	}
+
+	// 生成最终 HTML (macOS 风格代码卡片)
+    // 注意：这里最外层没有 pre，只有我们定义的 .code-card
+	return `
+    <div class="code-card my-4 overflow-hidden rounded-xl border border-base-300 bg-[#282c34] shadow-sm text-left group/code">
+
+      <div class="flex h-9 items-center justify-between border-b border-white/10 bg-[#21252b] px-3 select-none">
+        <div class="flex items-center gap-2">
+          <div class="flex gap-1.5">
+            <div class="h-2.5 w-2.5 rounded-full bg-[#ff5f56]"></div>
+            <div class="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]"></div>
+            <div class="h-2.5 w-2.5 rounded-full bg-[#27c93f]"></div>
+          </div>
+          <span class="ml-2 font-mono text-[10px] font-bold uppercase tracking-wider text-gray-500">${lang || 'TEXT'}</span>
+        </div>
+
+        <button class="copy-code-btn flex items-center justify-center rounded-md p-1.5 text-gray-400 transition-all hover:bg-white/10 hover:text-white active:scale-95 opacity-0 group-hover/code:opacity-100" title="Copy Code">
+          <span class="icon-copy pointer-events-none flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          </span>
+        </button>
+      </div>
+
+      <div class="relative">
+          <pre class="!bg-transparent !m-0 !p-4 overflow-x-auto text-sm leading-relaxed scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-transparent"><code class="font-mono !bg-transparent text-[#abb2bf]">${highlightedCode}</code></pre>
+      </div>
+    </div>
+  `;
 };
 
-// 保存默认的渲染器
+// 2. 图片渲染规则 (保持之前的功能)
 const defaultImageRender =
 	md.renderer.rules.image ||
 	function (tokens, idx, options, env, self) {
@@ -56,34 +79,42 @@ const defaultImageRender =
 	};
 
 md.renderer.rules.image = function (tokens, idx, options, env, self) {
-	// 获取当前 render 的上下文配置（需要在 render 调用时传递 env，或者利用闭包）
 	const token = tokens[idx];
-	const src = token.attrGet('src');
+	const src = token.attrGet('src') || '';
 	const alt = token.content;
 
 	if (env && env.disableImages) {
-		// 渲染为一个漂亮的占位符，而不是丑陋的 code block
 		return `
-      <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-base-200 text-xs text-base-content/60 border border-base-300 cursor-not-allowed select-none" title="Image generation disabled">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3"><path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 013.25 3h13.5A2.25 2.25 0 0119 5.25v9.5A2.25 2.25 0 0116.75 17H3.25A2.25 2.25 0 011 14.75v-9.5zm1.5 5.81v3.69c0 .414.336.75.75.75h13.5a.75.75 0 00.75-.75v-2.69l-2.22-2.219a.75.75 0 00-1.06 0l-1.91 1.909.47.47a.75.75 0 11-1.06 1.06L6.53 8.091a.75.75 0 00-1.06 0l-2.97 2.97zM12 7a1 1 0 11-2 0 1 1 0 012 0z" clip-rule="evenodd" /></svg>
+      <a
+        href="${md.utils.escapeHtml(src)}"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center gap-1 px-2 py-1 rounded bg-base-200 text-xs text-base-content/60 border border-base-300 select-none transition-colors hover:bg-base-300 hover:text-primary !no-underline"
+        title="Click to open image source"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3">
+            <path fill-rule="evenodd" d="M1 5.25A2.25 2.25 0 013.25 3h13.5A2.25 2.25 0 0119 5.25v9.5A2.25 2.25 0 0116.75 17H3.25A2.25 2.25 0 011 14.75v-9.5zm1.5 5.81v3.69c0 .414.336.75.75.75h13.5a.75.75 0 00.75-.75v-2.69l-2.22-2.219a.75.75 0 00-1.06 0l-1.91 1.909.47.47a.75.75 0 11-1.06 1.06L6.53 8.091a.75.75 0 00-1.06 0l-2.97 2.97zM12 7a1 1 0 11-2 0 1 1 0 012 0z" clip-rule="evenodd" /></svg>
         Image: ${md.utils.escapeHtml(alt || 'Untitled')}
-      </span>
+        <span class="opacity-50 ml-1">↗</span>
+      </a>
     `;
 	}
 
 	return defaultImageRender(tokens, idx, options, env, self);
 };
 
+type RenderOptions = {
+	disableImages?: boolean;
+};
+
 export function renderMarkdown(text: string, options: RenderOptions = {}): string {
-	// 传入 options 到 env 参数中，以便 rule 里面读取
 	const rawHtml = md.render(text, { disableImages: options.disableImages });
 
 	const cleanHtml = DOMPurify.sanitize(rawHtml, {
-		// 移除 SVG 相关标签，保留 MathML
 		ADD_TAGS: [
 			'math',
 			'mstyle',
-			'mspace', // 'svg', 'path', 'g'
+			'mspace',
 			'mfrac',
 			'mi',
 			'mn',
@@ -98,12 +129,7 @@ export function renderMarkdown(text: string, options: RenderOptions = {}): strin
 			'msqrt',
 			'munderover'
 		],
-		ADD_ATTR: [
-			'style',
-			'target',
-			'rel',
-			'class' // 允许我们刚才加的 class 和 target
-		]
+		ADD_ATTR: ['style', 'target', 'rel', 'class']
 	});
 
 	return cleanHtml;

@@ -31,7 +31,7 @@ use sled::IVec;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LLMConfig {
     pub model: Option<String>,
     pub temp: Option<f32>,
@@ -42,8 +42,31 @@ pub struct LLMConfig {
     pub user: Option<String>,
     pub seed: Option<i64>,
     pub max_completion_tokens: Option<u32>,
-    pub parallel_function_call: bool,
+    pub parallel_function_call: Option<bool>,
     pub system_prompt_lang: Option<whatlang::Lang>,
+    pub custom_system_prompt: Option<String>,
+}
+
+impl LLMConfig {
+    /// Merge `other` into self
+    /// a member will be keep as `self` if it exists in `self`
+    /// if it's none in `self` will be applied from `other`
+    pub fn merge_in(self, other: Self) -> Self {
+        Self {
+            model: self.model.or(other.model),
+            temp: self.temp.or(other.temp),
+            stream: self.stream.or(other.stream),
+            frequency_penalty: self.frequency_penalty.or(other.frequency_penalty),
+            presence_penality: self.presence_penality.or(other.presence_penality),
+            top_p: self.top_p.or(other.top_p),
+            user: self.user.or(other.user),
+            seed: self.seed.or(other.seed),
+            max_completion_tokens: self.max_completion_tokens.or(other.max_completion_tokens),
+            parallel_function_call: self.parallel_function_call.or(other.parallel_function_call),
+            system_prompt_lang: self.system_prompt_lang.or(other.system_prompt_lang),
+            custom_system_prompt: self.custom_system_prompt.or(other.custom_system_prompt),
+        }
+    }
 }
 
 impl Default for LLMConfig {
@@ -58,8 +81,9 @@ impl Default for LLMConfig {
             user: None,
             seed: None,
             max_completion_tokens: None,
-            parallel_function_call: false,
+            parallel_function_call: None,
             system_prompt_lang: Some(whatlang::Lang::Cmn),
+            custom_system_prompt: None,
         }
     }
 }
@@ -168,6 +192,11 @@ impl<T: Config> LLMProvider<T> {
             image: image_db,
             toolset: Arc::new(toolset),
         })
+    }
+
+    pub async fn get_model_names(&self) -> Result<Vec<String>, anyhow::Error> {
+        let models = self.client.models().list().await?;
+        Ok(models.data.into_iter().map(|x| x.id).collect())
     }
 
     pub fn get_history_list(&self) -> Vec<ChatMeta> {
@@ -284,7 +313,7 @@ impl<T: Config> LLMProvider<T> {
         Ok(try_stream! {
             let mut current_session = provider.get_chat(chat_id)?.ok_or(anyhow!("Unexpected empty chat {}", chat_id))?;
             loop {
-                let req_messages = provider.message_to_openai(current_session.clone(), llm_config.parallel_function_call, llm_config.system_prompt_lang);
+                let req_messages = provider.message_to_openai(current_session.clone(), llm_config.parallel_function_call.unwrap_or(false), llm_config.system_prompt_lang, llm_config.custom_system_prompt.clone());
                 let mut req: CreateChatCompletionRequest = llm_config.clone().into();
                 req.messages = req_messages;
 
@@ -600,6 +629,7 @@ impl<T: Config> LLMProvider<T> {
         v: ChatEntry,
         is_parallel_fc: bool,
         lang: Option<whatlang::Lang>,
+        custom_prompt: Option<String>,
     ) -> Vec<ChatCompletionRequestMessage> {
         let lang = match lang {
             Some(l) => l,
@@ -623,12 +653,24 @@ impl<T: Config> LLMProvider<T> {
                 .flatten()
                 .unwrap_or(whatlang::Lang::Cmn),
         };
-        tracing::info!("User input language: {}", lang);
+        tracing::debug!("User input language: {}", lang);
+        let core_system_prompt = self.toolset.system_prompt(lang, is_parallel_fc);
+        let final_system_prompt = if let Some(user_prompt) = custom_prompt {
+            if !user_prompt.trim().is_empty() {
+                format!(
+                    "{}\n\n--- System Capabilities ---\n{}",
+                    user_prompt, core_system_prompt
+                )
+            } else {
+                core_system_prompt
+            }
+        } else {
+            core_system_prompt
+        };
+
         let system_message =
             ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(
-                    self.toolset.system_prompt(lang, is_parallel_fc),
-                ),
+                content: ChatCompletionRequestSystemMessageContent::Text(final_system_prompt),
                 name: None,
             });
         let mut history_messages: Vec<ChatCompletionRequestMessage> = v

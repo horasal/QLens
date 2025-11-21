@@ -160,8 +160,9 @@ impl Into<LLMConfig> for Arguments {
             user: self.user,
             seed: self.seed,
             max_completion_tokens: self.max_completion_tokens,
-            parallel_function_call: self.parallel_function_call,
+            parallel_function_call: Some(self.parallel_function_call),
             system_prompt_lang: self.system_prompt_language.to_lang(),
+            custom_system_prompt: None,
         }
     }
 }
@@ -215,6 +216,7 @@ async fn main() -> Result<()> {
     };
 
     let app = Router::new()
+        .route("/api/models", get(model_list_handler))
         .route("/api/chat", get(chat_handler))
         .route("/api/chat/new", post(new_chat_handler))
         .route("/api/history", get(get_history_handler))
@@ -294,6 +296,7 @@ pub enum ClientRequest {
         request_id: Uuid, // 前端生成的唯一ID
         chat_id: Uuid,
         content: Vec<MessageContent>,
+        config: Option<LLMConfig>,
     },
     Regenerate {
         request_id: Uuid,
@@ -370,6 +373,7 @@ async fn handle_stream(
     }
 }
 
+
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     tracing::info!("New websocket Connection");
 
@@ -402,18 +406,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     control.abort.abort();
                                 }
                             }
-                            ClientRequest::Chat { request_id, chat_id, content } => {
+                            ClientRequest::Chat { request_id, chat_id, content, config } => {
                                 tracing::info!("Start generation for req: {}, chat: {}", request_id, chat_id);
+
 
                                 let state = state.clone();
                                 let tx = tx.clone();
                                 let token = CancellationToken::new();
 
+                                let llm_config = config.map(|x| x.merge_in(state.config.clone())).unwrap_or(state.config.clone());
+
                                 let (abort_handle, abort_reg) = AbortHandle::new_pair();
                                 tasks.insert(request_id, TaskControl { abort: abort_handle, token: token.clone() });
 
                                 tokio::spawn(async move {
-                                    let stream_result = state.llm.send_chat_message(chat_id, content, state.config.clone(), token).await;
+                                    let stream_result = state.llm.send_chat_message(chat_id, content, llm_config, token).await;
                                     handle_stream(chat_id, request_id, tx.clone(), stream_result, abort_reg).await;
                                     let _ = tx.send(LoopEvent::TaskFinished(request_id));
                                 });
@@ -478,6 +485,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         tracing::info!("Cleaning up {} active tasks", tasks.len());
         for (_, control) in tasks {
             control.abort.abort();
+        }
+    }
+}
+
+async fn model_list_handler(State(state): State<Arc<AppState>>) -> Response {
+    match state.llm.get_model_names().await {
+        Ok(list) => {
+            Json(list).into_response()
+        },
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list models, {}", e)).into_response()
         }
     }
 }

@@ -3,6 +3,7 @@
 	import * as ChatService from '$lib/services/chatService';
 	import { _ } from 'svelte-i18n';
 	import type { PreviewFile } from '$lib/types';
+	import { settings } from '$lib/stores/settingsStore';
 
 	let textInput = '';
 	let previewFiles: PreviewFile[] = [];
@@ -45,10 +46,18 @@
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter' && !e.shiftKey) {
-			e.preventDefault();
-			handleSend();
-		}
+	    if (e.isComposing) return;
+		if ($settings.enterToSend) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+            }
+        } else {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                handleSend();
+            }
+        }
 	}
 
 	$: isProcessing = $currentChat && $processingChatIds.has($currentChat.id);
