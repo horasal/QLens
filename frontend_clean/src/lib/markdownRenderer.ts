@@ -21,8 +21,6 @@ md.use(markdownItLinkAttributes, {
 	}
 });
 
-// 1. 【核心修复】完全重写代码块渲染规则 (fence)
-// 这能避免外层被套上多余的 <pre> 标签
 md.renderer.rules.fence = function (tokens, idx, options, env, self) {
 	const token = tokens[idx];
 	const info = token.info ? md.utils.unescapeAll(token.info).trim() : '';
@@ -43,7 +41,6 @@ md.renderer.rules.fence = function (tokens, idx, options, env, self) {
 	}
 
 	// 生成最终 HTML (macOS 风格代码卡片)
-    // 注意：这里最外层没有 pre，只有我们定义的 .code-card
 	return `
     <div class="code-card my-4 overflow-hidden rounded-xl border border-base-300 bg-[#282c34] shadow-sm text-left group/code">
 
@@ -71,7 +68,6 @@ md.renderer.rules.fence = function (tokens, idx, options, env, self) {
   `;
 };
 
-// 2. 图片渲染规则 (保持之前的功能)
 const defaultImageRender =
 	md.renderer.rules.image ||
 	function (tokens, idx, options, env, self) {
@@ -127,7 +123,7 @@ export function renderMarkdown(text: string, options: RenderOptions = {}): strin
 			'mtr',
 			'mrow',
 			'msqrt',
-			'munderover'
+			'munderover',
 		],
 		ADD_ATTR: ['style', 'target', 'rel', 'class']
 	});
