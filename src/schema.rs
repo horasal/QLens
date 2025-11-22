@@ -55,11 +55,15 @@ pub struct Message {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[serde(tag = "role", content = "tool_call_id")]
 pub enum Role {
     User,
     Assistant,
     System,
-    Tools,
+    /// Response from tools and its Origin UUID from tool_use
+    #[serde(rename = "tool")]
+    Tools(Uuid),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -106,6 +110,8 @@ impl Into<ChatCompletionRequestSystemMessageContentPart> for MessageContent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolUse {
+    #[serde(default = "Uuid::new_v4")]
+    pub use_id: Uuid,
     pub function_name: String,
     pub args: String,
 }

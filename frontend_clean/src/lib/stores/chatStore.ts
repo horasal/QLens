@@ -1,5 +1,6 @@
-import { writable, derived } from 'svelte/store';
+import { writable } from 'svelte/store';
 import type { ChatEntry, ChatMeta, Toast } from '../types';
+import type { CompletionUsage } from '../types';
 
 // --- 基础 UI 状态 ---
 export const isLoading = writable<boolean>(false);
@@ -9,6 +10,7 @@ export const connectionStatus = writable<'connected' | 'disconnected' | 'reconne
 // --- 聊天数据 ---
 export const historyList = writable<ChatMeta[]>([]);
 export const currentChat = writable<ChatEntry | null>(null);
+export const currentUsage = writable<CompletionUsage | null>(null);
 
 // --- 正在处理中的 Chat IDs (Set 的 Store 封装) ---
 function createSetStore<T>() {

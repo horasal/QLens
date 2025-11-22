@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolKind,
-    schema::{Message, MessageContent, Role, ToolUse},
-    tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet},
+    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolDescription, ToolKind, schema::{Message, MessageContent, Role, ToolUse}, tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet}
 };
 use anyhow::{Error, anyhow, bail};
 use async_openai::types::{
@@ -13,6 +11,7 @@ use async_openai::types::{
     ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
     ChatCompletionRequestToolMessageContent, ChatCompletionRequestToolMessageContentPart,
     ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
+    ChatCompletionStreamOptions, CompletionUsage,
 };
 
 use async_openai::{
@@ -125,13 +124,17 @@ pub enum ChatEvent {
         /// 对应的工具调用（用于UI关联）
         tool_use: ToolUse,
         /// 结果 (LLMProvider 应从DB中提取Blob并填充)
-        result: Vec<MessageContent>,
+        result: Message,
     },
 
     /// LLM的“最终回复”的增量。
     ContentDelta(String),
     /// 通知UI已经结束
     StreamEnd {},
+    /// Token数量的通知
+    Usage(CompletionUsage),
+    /// 服务器错误信息
+    Error(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -197,6 +200,14 @@ impl<T: Config> LLMProvider<T> {
     pub async fn get_model_names(&self) -> Result<Vec<String>, anyhow::Error> {
         let models = self.client.models().list().await?;
         Ok(models.data.into_iter().map(|x| x.id).collect())
+    }
+
+    pub async fn call_tool(&self, tool: ToolUse) -> Message  {
+        self.toolset.use_tool_async(tool).await.1
+    }
+
+    pub fn list_tools(&self) -> Vec<ToolDescription> {
+        self.toolset.list_tools()
     }
 
     pub fn get_history_list(&self) -> Vec<ChatMeta> {
@@ -284,6 +295,48 @@ impl<T: Config> LLMProvider<T> {
             .await
     }
 
+    pub async fn edit_message_and_regenerate(
+        &self,
+        chat_id: Uuid,
+        message_id: Uuid,
+        new_content: Vec<MessageContent>,
+        llm_config: LLMConfig,
+        cancel_token: CancellationToken,
+    ) -> Result<impl Stream<Item = Result<ChatEvent, Error>>, Error> {
+        self.edit_and_truncate_history(chat_id, message_id, new_content)?;
+        self.stream_chat_response(chat_id, llm_config, cancel_token)
+            .await
+    }
+
+    fn edit_and_truncate_history(
+        &self,
+        chat_id: Uuid,
+        target_id: Uuid,
+        new_content: Vec<MessageContent>,
+    ) -> Result<(), Error> {
+        let mut entry = self
+            .get_chat(chat_id)?
+            .ok_or(anyhow!("Can not found chat {} from database.", chat_id))?;
+
+        if let Some(index) = entry.messages.iter().position(|m| m.id == target_id) {
+            if entry.messages[index].owner == Role::User {
+                for msg in entry.messages.iter().skip(index + 1) {
+                    self.delete_entry_with_picture(msg);
+                }
+                entry.messages.truncate(index + 1);
+
+                entry.messages[index].content = new_content;
+
+                self.history
+                    .insert(chat_id.as_bytes(), serde_json::to_vec(&entry)?)?;
+                tracing::info!("Edited message {} and truncated history", target_id);
+            } else {
+                bail!("Edited message does not belong to user")
+            }
+        }
+        Ok(())
+    }
+
     pub async fn send_chat_message(
         &self,
         chat_id: Uuid,
@@ -316,6 +369,9 @@ impl<T: Config> LLMProvider<T> {
                 let req_messages = provider.message_to_openai(current_session.clone(), llm_config.parallel_function_call.unwrap_or(false), llm_config.system_prompt_lang, llm_config.custom_system_prompt.clone());
                 let mut req: CreateChatCompletionRequest = llm_config.clone().into();
                 req.messages = req_messages;
+                req.stream_options = Some(ChatCompletionStreamOptions{
+                    include_usage: true
+                });
 
                 let chat = self.client.chat();
                 let stream_future = chat.create_stream(req);
@@ -338,6 +394,9 @@ impl<T: Config> LLMProvider<T> {
 
                             while let Some(thunk) = stream.next().await {
                                 let thunk = thunk?;
+                                if let Some(usage) = thunk.usage {
+                                        yield ChatEvent::Usage(usage);
+                                }
                                 if let Some(content) = thunk
                                     .choices
                                     .first()
@@ -447,7 +506,9 @@ impl<T: Config> LLMProvider<T> {
                                                 assistant_reasoning.push_str(&args_part_raw);
 
                                                 let tool_use =
-                                                    ToolUse { function_name: current_tool_name.clone(), args };
+                                                    ToolUse {
+                                                        use_id: Uuid::new_v4(),
+                                                        function_name: current_tool_name.clone(), args };
                                                 yield ChatEvent::ToolCall(tool_use.clone());
                                                 assistant_tool_calls.push(tool_use);
 
@@ -492,7 +553,11 @@ impl<T: Config> LLMProvider<T> {
                         assistant_reasoning.push_str(&parse_buffer);
                         yield ChatEvent::ToolDelta(parse_buffer);
 
-                        let tool_use = ToolUse { function_name: current_tool_name.clone(), args };
+                        let tool_use = ToolUse {
+                            use_id: Uuid::new_v4(),
+                            function_name: current_tool_name.clone(),
+                            args
+                        };
                         yield ChatEvent::ToolCall(tool_use.clone());
                         assistant_tool_calls.push(tool_use);
                     }
@@ -525,29 +590,16 @@ impl<T: Config> LLMProvider<T> {
 
                 let mut futures = Vec::new();
                 for tool_call in assistant_tool_calls.iter() {
-                    futures.push(provider.toolset.use_tool_async(tool_call.function_name.clone(), tool_call.args.clone()));
+                    futures.push(provider.toolset.use_tool_async(tool_call.clone()));
                 }
 
-                let results: Vec<Message> = futures::future::join_all(futures).await;
+                let results: Vec<(ToolUse, Message)> = futures::future::join_all(futures).await;
 
-                let mut tool_results_content = Vec::new();
-                for (i, res) in results.into_iter().enumerate() {
-                    let tool_use = assistant_tool_calls[i].clone();
-                    let result_content = res;
-
-                    yield ChatEvent::ToolResult { tool_use, result: result_content.content.clone() };
-                    tool_results_content.push(result_content);
+                for (tool_use, res) in results.into_iter() {
+                    yield ChatEvent::ToolResult { tool_use, result: res.clone() };
+                    current_session = provider.append_message(chat_id, res)?;
                 }
 
-                let tool_message = Message {
-                    id: Uuid::new_v4(),
-                    owner: Role::Tools,
-                    content: tool_results_content.into_iter().flat_map(|v| v.content).collect(),
-                    reasoning: vec![],
-                    tool_use: vec![],
-                };
-
-                current_session = provider.append_message(chat_id, tool_message)?;
             }
         })
     }
@@ -722,13 +774,14 @@ impl<T: Config> LLMProvider<T> {
                 );
                 r
             }),
-            Role::Tools => ChatCompletionRequestMessage::Tool({
+            Role::Tools(id) => ChatCompletionRequestMessage::Tool({
                 //原始的async-openai不支持tool返回image，这里用的是修改版
                 //let mut r = ChatCompletionRequestUserMessage::default();
                 //r.content = ChatCompletionRequestUserMessageContent::Array(
                 //    self.map_multi_modal_tool_messages(v)?,
                 //);
                 let mut r = ChatCompletionRequestToolMessage::default();
+                r.tool_call_id = id.to_string();
                 r.content = ChatCompletionRequestToolMessageContent::Array(
                     self.map_multi_modal_tool_messages(v)?,
                 );

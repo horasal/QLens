@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 
 export type AppSettings = {
     model: string;
@@ -23,7 +23,8 @@ const defaultSettings: AppSettings = {
 };
 
 function createSettingsStore() {
-    const { subscribe, set, update } = writable<AppSettings>(defaultSettings);
+    const store = writable<AppSettings>(defaultSettings);
+    const { subscribe, set, update } = store;
 
     if (typeof localStorage !== 'undefined') {
         const saved = localStorage.getItem('app_settings');
@@ -54,9 +55,22 @@ function createSettingsStore() {
                 return newVal;
             });
         },
+        getLLMConfig: () => {
+          const val = get(store);
+          return {
+            model: val.model,
+            temp: val.temperature,
+            custom_system_prompt: val.customSystemPrompt,
+            max_completion_tokens: val.maxTokens,
+            top_p: val.topP,
+            parallel_function_call: val.parallelFunctionCall,
+            system_prompt_language: val.systemPromptLang === '' ? null:val.systemPromptLang,
+          };
+        },
         reset: () => set(defaultSettings)
     };
 }
 
 export const settings = createSettingsStore();
 export const showSettings = writable(false);
+export const showArtifacts = writable(false);

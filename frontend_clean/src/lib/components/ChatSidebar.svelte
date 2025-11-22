@@ -4,31 +4,16 @@
 	import { _ } from 'svelte-i18n';
 	import { onMount } from 'svelte';
 	import { showSettings } from '$lib/stores/settingsStore';
-
-	let isDark = false;
+	import { themeStore } from '$lib/stores/themeStore';
 
 	onMount(() => {
-		const savedTheme = localStorage.getItem('theme');
-		if (savedTheme) {
-			isDark = savedTheme === 'dim';
-		} else {
-			isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-		}
+		themeStore.init();
 	});
-
-	$: {
-		if (typeof document !== 'undefined') {
-			const theme = isDark ? 'dim' : 'lofi';
-			document.documentElement.setAttribute('data-theme', theme);
-			localStorage.setItem('theme', theme);
-		}
-	}
 
 	function handleDelete(e: MouseEvent, id: string) {
 		e.stopPropagation();
 		ChatService.deleteChat(id);
 	}
-
 </script>
 
 <div class="drawer-side z-20">
@@ -76,7 +61,7 @@
 		<div class="mt-auto px-2">
 			<button
 				class="btn w-full justify-start gap-3 text-base-content/70 btn-ghost hover:bg-base-300 hover:text-base-content"
-				on:click={() => $showSettings = true}
+				on:click={() => ($showSettings = true)}
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"
@@ -115,7 +100,12 @@
 					/></svg
 				>
 
-				<input type="checkbox" class="theme-controller toggle" bind:checked={isDark} />
+				<input
+					type="checkbox"
+					class="theme-controller toggle"
+					checked={$themeStore}
+					on:change={themeStore.toggle}
+				/>
 
 				<svg
 					xmlns="http://www.w3.org/2000/svg"

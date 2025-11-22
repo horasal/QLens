@@ -4,6 +4,20 @@ export type ChatMeta = {
     summary: string;
 };
 
+export type CompletionUsage = {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+};
+
+export type ToolDescription = {
+  name_for_model: string;
+  name_for_human: string;
+  description_for_model: string;
+  parameters: any;
+  args_format: string;
+};
+
 // 对应 Rust enum MessageContent
 export type MessageContent =
     | { Text: string }
@@ -11,12 +25,20 @@ export type MessageContent =
     | { ImageBin: [string, string, string] }; // [base64, uuid, description]
 
 export type ToolUse = {
+    use_id: string;
     function_name: string;
     args: string;
 };
+
+export type Role =
+    | { role: 'user' }
+    | { role: 'assistant' }
+    | { role: 'system' }
+    | { role: 'tool'; tool_call_id: string };
+
 export type Message = {
-    id: string; // <--- 新增：对应后端的 Uuid
-    owner: 'User' | 'Assistant' | 'System' | 'Tools';
+    id: string;
+    owner: Role;
     reasoning: MessageContent[];
     content: MessageContent[];
     tool_use: ToolUse[];
@@ -24,9 +46,10 @@ export type Message = {
 };
 
 export type ClientRequest =
-    | { type: 'Chat'; payload: { request_id: string; chat_id: string; content: MessageContent[] } }
+    | { type: 'Chat'; payload: { request_id: string; chat_id: string; content: MessageContent[], config?: any } }
     | { type: 'Abort'; payload: { request_id: string; chat_id: string } }
-    | { type: 'Regenerate'; payload: { request_id: string; chat_id: string; message_id: string } };
+    | { type: 'Regenerate'; payload: { request_id: string; chat_id: string; message_id: string, config?: any } }
+    | { type: 'Edit'; payload: { request_id: string; chat_id: string; message_id: string; new_content: MessageContent[]; config?: any } };
 
 export type ChatEntry = {
     id: string;
@@ -48,9 +71,11 @@ export interface StreamPacket {
     ReasoningDelta?: string;
     ToolDelta?: string;
     ToolCall?: ToolUse;
-    ToolResult?: { tool_use: ToolUse; result: MessageContent[] };
+    ToolResult?: { tool_use: ToolUse; result: Message };
     ContentDelta?: string;
     StreamEnd?: boolean;
+    Usage?: CompletionUsage;
+    Error?: string;
 }
 
 export type UploadImageResponse = {

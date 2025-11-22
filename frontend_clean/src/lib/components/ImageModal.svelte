@@ -13,6 +13,15 @@
 		dispatch('close');
 	}
 
+	function copyUUID() {
+		if (!src) return;
+		const uuid = src.split('/').pop();
+		if (uuid) {
+			navigator.clipboard.writeText(uuid);
+			toasts.show('Image UUID copied!', 'success');
+		}
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') close();
 	}
@@ -62,6 +71,12 @@
 			<div
 				class="absolute right-0 -bottom-12 left-0 flex justify-center gap-4 opacity-0 transition-opacity hover:opacity-100"
 			>
+				<button
+					class="btn border-0 bg-base-100/50 text-base-content backdrop-blur-sm btn-outline btn-sm"
+					on:click|stopPropagation={copyUUID}
+				>
+					Copy UUID
+				</button>
 				<a href={src} download="image.png" class="btn btn-outline btn-sm" on:click|stopPropagation>
 					Download
 				</a>

@@ -28,9 +28,7 @@ use futures::{
     stream::{AbortHandle, AbortRegistration, Abortable},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{
-    mpsc::{self, UnboundedSender},
-};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use tower_http::{
     compression::CompressionLayer,
@@ -175,7 +173,6 @@ struct AppState {
 #[folder = "frontend_clean/build"]
 struct Assets;
 
-
 struct TaskControl {
     abort: AbortHandle,
     token: CancellationToken,
@@ -216,6 +213,8 @@ async fn main() -> Result<()> {
     };
 
     let app = Router::new()
+        .route("/api/tools", get(list_tools_handler))
+        .route("/api/tools/{name}", post(call_tool_handler))
         .route("/api/models", get(model_list_handler))
         .route("/api/chat", get(chat_handler))
         .route("/api/chat/new", post(new_chat_handler))
@@ -284,6 +283,29 @@ async fn index_html() -> Response {
     }
 }
 
+#[derive(Deserialize)]
+struct ToolCallRequest {
+    args: String,
+}
+
+async fn list_tools_handler(State(state): State<Arc<AppState>>) -> Response {
+    Json(state.llm.list_tools()).into_response()
+}
+
+async fn call_tool_handler(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(payload): Json<ToolCallRequest>,
+) -> Response {
+    let tool_use = ToolUse {
+        use_id: Uuid::new_v4(),
+        function_name: name,
+        args: payload.args,
+    };
+    let result_message = state.llm.call_tool(tool_use).await;
+    Json(result_message).into_response()
+}
+
 async fn chat_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
@@ -302,6 +324,14 @@ pub enum ClientRequest {
         request_id: Uuid,
         chat_id: Uuid,
         message_id: Uuid, // 用户点击的那个消息 ID
+        config: Option<LLMConfig>,
+    },
+    Edit {
+        request_id: Uuid,
+        chat_id: Uuid,
+        message_id: Uuid,
+        new_content: Vec<MessageContent>, // 用户修改后的新内容
+        config: Option<LLMConfig>,
     },
     /// 终止生成
     Abort { request_id: Uuid, chat_id: Uuid },
@@ -351,6 +381,14 @@ async fn handle_stream(
                     }
                     Err(e) => {
                         tracing::error!("Stream error in task {}: {}", request_id, e);
+                        let error_packet = StreamPacket {
+                            chat_id,
+                            request_id,
+                            event: ChatEvent::Error(e.to_string()),
+                        };
+                        if let Ok(json) = serde_json::to_string(&error_packet) {
+                            let _ = tx.send(LoopEvent::InternalMsg(json));
+                        }
                         break;
                     }
                 }
@@ -368,11 +406,17 @@ async fn handle_stream(
         }
         Err(e) => {
             tracing::error!("Failed to initialize stream for {}: {}", request_id, e);
-            // 这里可以构造一个 Error 类型的 Packet 发回给前端
+            let error_packet = StreamPacket {
+                chat_id,
+                request_id,
+                event: ChatEvent::Error(e.to_string()),
+            };
+            if let Ok(json) = serde_json::to_string(&error_packet) {
+                let _ = tx.send(LoopEvent::InternalMsg(json));
+            }
         }
     }
 }
-
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     tracing::info!("New websocket Connection");
@@ -393,7 +437,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             Ok(req) => req,
                             Err(e) => {
                                 tracing::error!("Failed to parse client ws message: {}", e);
-                                // 可选：发送错误回执给前端
                                 continue;
                             }
                         };
@@ -425,7 +468,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     let _ = tx.send(LoopEvent::TaskFinished(request_id));
                                 });
                             }
-                            ClientRequest::Regenerate { request_id, chat_id, message_id } => {
+                            ClientRequest::Regenerate { request_id, chat_id, message_id, config } => {
                                 tracing::info!("Regenerate request: {}, msg: {}", request_id, message_id);
 
                                 let state = state.clone();
@@ -433,17 +476,41 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
                                 let token = CancellationToken::new();
                                 let (abort_handle, abort_reg) = AbortHandle::new_pair();
+                                let llm_config = config.map(|x| x.merge_in(state.config.clone())).unwrap_or(state.config.clone());
                                 tasks.insert(request_id, TaskControl { abort: abort_handle, token: token.clone() });
                                 tokio::spawn(async move {
                                         let stream_result = state.llm.regenerate_at(
                                             chat_id,
                                             message_id,
-                                            state.config.clone(),
+                                            llm_config,
                                             token
                                         ).await;
                                         handle_stream(chat_id, request_id, tx.clone(), stream_result, abort_reg).await;
                                         let _ = tx.send(LoopEvent::TaskFinished(request_id));
                                 });
+                            }
+                                ClientRequest::Edit { request_id, chat_id, message_id, new_content, config } => {
+                                        tracing::info!("Edit request: {}", message_id);
+                                        let state = state.clone();
+                                        let tx = tx.clone();
+
+                                        let token = CancellationToken::new();
+                                        let (abort_handle, abort_reg) = AbortHandle::new_pair();
+                                        tasks.insert(request_id, TaskControl { abort: abort_handle, token: token.clone() });
+                                        let llm_config = config.map(|x| x.merge_in(state.config.clone())).unwrap_or(state.config.clone());
+
+                                        tokio::spawn(async move {
+                                            let stream_result = state.llm.edit_message_and_regenerate(
+                                                chat_id,
+                                                message_id,
+                                                new_content,
+                                                llm_config,
+                                                token
+                                            ).await;
+
+                                            handle_stream(chat_id, request_id, tx.clone(), stream_result, abort_reg).await;
+                                            let _ = tx.send(LoopEvent::TaskFinished(request_id));
+                                        });
                             }
                         }
                     }
@@ -491,13 +558,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
 async fn model_list_handler(State(state): State<Arc<AppState>>) -> Response {
     match state.llm.get_model_names().await {
-        Ok(list) => {
-            Json(list).into_response()
-        },
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to list models, {}", e)).into_response()
-        }
+        Ok(list) => Json(list).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to list models, {}", e),
+        )
+            .into_response(),
     }
 }
 

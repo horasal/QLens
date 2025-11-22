@@ -64,7 +64,7 @@ impl ToolKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolDescription {
     pub name_for_model: String,
     pub name_for_human: String,
@@ -137,6 +137,10 @@ impl ToolSet {
         ToolSetBuilder::new()
     }
 
+    pub fn list_tools(&self) -> Vec<ToolDescription> {
+        self.tools.values().map(|v| v.description()).collect()
+    }
+
     pub fn add_tool(&mut self, tool: Box<dyn Tool + Send + Sync>) -> &mut Self {
         let name = tool.name();
         if self.tools.insert(name.clone(), tool).is_some() {
@@ -145,31 +149,32 @@ impl ToolSet {
         self
     }
 
-    pub async fn use_tool_async(&self, tool_name: String, args: String) -> Message {
-        let result_content = match self.tools.get(&tool_name) {
+    pub async fn use_tool_async(&self, tool_use: ToolUse) -> (ToolUse, Message) {
+        let result_content = match self.tools.get(&tool_use.function_name) {
             None => {
-                let error_msg = format!("错误：未找到名为 '{}' 的工具。", tool_name);
+                let error_msg = format!("错误：未找到名为 '{}' 的工具。", tool_use.function_name);
                 vec![MessageContent::Text(error_msg)]
             }
             Some(tool) => {
-                // 修改：这里需要 .await
-                match tool.call(&args).await {
+                match tool.call(&tool_use.args).await {
                     Ok(content) => content,
                     Err(e) => {
-                        let error_msg = format!("工具 '{}' 执行失败：{}", tool_name, e);
+                        let error_msg = format!("工具 '{}' 执行失败：{}", tool_use.function_name, e);
                         vec![MessageContent::Text(error_msg)]
                     }
                 }
             }
         };
 
+        let origin = tool_use.use_id.clone();
+        (tool_use,
         Message {
             id: Uuid::new_v4(),
-            owner: Role::Tools,
+            owner: Role::Tools(origin),
             content: result_content,
             reasoning: vec![],
             tool_use: vec![],
-        }
+        })
     }
 
     pub fn system_prompt(&self, lang: whatlang::Lang, parallel_function_calls: bool) -> String {

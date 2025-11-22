@@ -6,12 +6,86 @@
 	import { createEventDispatcher, tick } from 'svelte';
 	import type { MessageContent } from '$lib/types';
 	import { toasts } from '$lib/stores/chatStore';
+	import { settings } from '$lib/stores/settingsStore';
+	import { playgroundState } from '$lib/stores/artifactStore';
+	import { showArtifacts } from '$lib/stores/settingsStore';
 
 	const dispatch = createEventDispatcher();
 	let chatContainer: HTMLElement;
 	let autoScrollEnabled = true;
 	let showScrollToBottomButton = false;
+	let editingMessageId: string | null = null;
+	let editText = '';
+	let hoveredToolId: string | null = null;
 
+	function stringToColor(str: string) {
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			hash = str.charCodeAt(i) + ((hash << 5) - hash);
+		}
+		// 生成 HSL 颜色：色相(0-360), 饱和度(60-80%), 亮度(85-95%) -> 柔和背景色
+		const h = Math.abs(hash % 360);
+		return `hsl(${h}, 75%, 90%)`;
+	}
+
+	function stringToBorderColor(str: string) {
+		let hash = 0;
+		for (let i = 0; i < str.length; i++) {
+			hash = str.charCodeAt(i) + ((hash << 5) - hash);
+		}
+		// 边框颜色稍微深一点
+		const h = Math.abs(hash % 360);
+		return `hsl(${h}, 75%, 60%)`;
+	}
+
+	function getShortId(uuid: string) {
+		return uuid.slice(0, 6);
+	}
+
+	function startEdit(message: any) {
+		editingMessageId = message.id;
+		// 提取纯文本用于编辑
+		editText = message.content
+			.filter((c: any) => 'Text' in c)
+			.map((c: any) => c.Text)
+			.join('');
+	}
+
+	function cancelEdit() {
+		editingMessageId = null;
+		editText = '';
+	}
+
+	async function submitEdit(id: string) {
+		if (!editText.trim()) return;
+		// 调用 Service
+		await ChatService.editMessage(id, editText);
+		editingMessageId = null;
+	}
+
+	function copyToPlayground(toolName: string, args: string) {
+		$showArtifacts = true;
+		playgroundState.set({ toolName, args });
+	}
+
+	// 处理 Textarea 的快捷键
+	function handleEditKeydown(e: KeyboardEvent, id: string) {
+		if ($settings.enterToSend) {
+			if (e.key === 'Enter' && !e.shiftKey) {
+				e.preventDefault();
+				submitEdit(id);
+			} else if (e.key === 'Escape') {
+				cancelEdit();
+			}
+		} else {
+			if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+				e.preventDefault();
+				submitEdit(id);
+			} else if (e.key === 'Escape') {
+				cancelEdit();
+			}
+		}
+	}
 	// --- 工具函数 (用于模板渲染) ---
 	function getImageUrl(item: MessageContent): string | null {
 		if ('ImageRef' in item) return `/api/image/${item.ImageRef[0]}`;
@@ -168,48 +242,88 @@
 				{#if message.owner === 'User'}
 					<div class="group chat-end chat">
 						<div class="chat-header mb-1 opacity-0 transition-opacity group-hover:opacity-100">
-							<button
-								class="btn btn-circle text-base-content/50 btn-ghost btn-xs"
-								on:click={() => ChatService.regenerateMessage(message.id)}
-								title="Restart from here"
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 20 20"
-									fill="currentColor"
-									class="h-3 w-3"
+							{#if editingMessageId !== message.id && !$processingChatIds.has($currentChat.id)}
+								<button
+									class="btn btn-circle text-base-content/50 btn-ghost btn-xs"
+									on:click={() => startEdit(message)}
+									title="Edit"
 								>
-									<path
-										fill-rule="evenodd"
-										d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
-										clip-rule="evenodd"
-									/>
-								</svg>
-							</button>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 20 20"
+										fill="currentColor"
+										class="h-3 w-3"
+									>
+										<path
+											d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z"
+										/>
+										<path
+											d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z"
+										/>
+									</svg>
+								</button>
+
+								<button
+									class="btn btn-circle text-base-content/50 btn-ghost btn-xs"
+									on:click={() => ChatService.regenerateMessage(message.id)}
+									title="Restart from here"
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 20 20"
+										fill="currentColor"
+										class="h-3 w-3"
+									>
+										<path
+											fill-rule="evenodd"
+											d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+								</button>
+							{/if}
 						</div>
 						<div
 							class="chat-bubble border border-primary/10 bg-primary/10 text-base-content shadow-sm"
 						>
-							{#each message.content as item}
-								{#if 'Text' in item}
-									<div class="whitespace-pre-wrap">
-										<MarkdownBlock
-											content={item.Text}
-											on:imageClick={(e) => onImageClick(e.detail)}
-										/>
+							{#if editingMessageId === message.id}
+								<div class="flex flex-col gap-2 p-1">
+									<textarea
+										class="textarea-bordered textarea w-full bg-white/50"
+										rows="3"
+										bind:value={editText}
+										on:keydown={(e) => handleEditKeydown(e, message.id)}
+										autofocus
+									></textarea>
+									<div class="flex justify-end gap-2">
+										<button class="btn btn-ghost btn-xs" on:click={cancelEdit}>Cancel</button>
+										<button class="btn btn-xs btn-primary" on:click={() => submitEdit(message.id)}
+											>Save & Submit</button
+										>
 									</div>
-								{:else}
-									<img
-										src={getImageUrl(item)}
-										alt="User upload"
-										class="my-2 h-auto w-64 cursor-pointer rounded-lg border-2 border-white/20 object-cover"
-										on:click={() => {
-											const url = getImageUrl(item);
-											if (url) onImageClick(url);
-										}}
-									/>
-								{/if}
-							{/each}
+								</div>
+							{:else}
+								{#each message.content as item}
+									{#if 'Text' in item}
+										<div class="whitespace-pre-wrap">
+											<MarkdownBlock
+												content={item.Text}
+												on:imageClick={(e) => onImageClick(e.detail)}
+											/>
+										</div>
+									{:else}
+										<img
+											src={getImageUrl(item)}
+											alt="User upload"
+											class="my-2 h-auto w-64 cursor-pointer rounded-lg border-2 border-white/20 object-cover"
+											on:click={() => {
+												const url = getImageUrl(item);
+												if (url) onImageClick(url);
+											}}
+										/>
+									{/if}
+								{/each}
+							{/if}
 						</div>
 					</div>
 				{/if}
@@ -278,76 +392,101 @@
 							{/if}
 
 							{#if (message.tool_deltas && message.tool_deltas.length > 0) || message.tool_use.length > 0}
-								<div class="my-2">
-									{#if message.tool_use.length > 0}
-										{#each message.tool_use as tool}
-											<div class="dropdown dropdown-start dropdown-bottom">
-												<div
-													tabindex="0"
-													role="button"
-													class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-base-300 bg-base-200 px-3 py-1.5 font-mono text-xs text-base-content/80 transition-colors hover:border-secondary hover:text-secondary"
+								<div class="relative z-10 my-2 flex flex-wrap gap-2">
+									{#each message.tool_use as tool}
+										<div class="dropdown dropdown-start dropdown-bottom">
+											<div
+												tabindex="0"
+												role="button"
+												class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-base-300 bg-base-200 px-3 py-1.5 font-mono text-xs text-base-content/80 transition-colors hover:border-secondary hover:text-secondary"
+											>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 20 20"
+													fill="currentColor"
+													class="h-3 w-3"
 												>
-													<svg
-														xmlns="http://www.w3.org/2000/svg"
-														viewBox="0 0 20 20"
-														fill="currentColor"
-														class="h-3 w-3"
-													>
-														<path
-															fill-rule="evenodd"
-															d="M19 5.5a4.5 4.5 0 01-4.791 4.483c-.353.048-.709.09-1.07.126V12.5c0 .414-.336.75-.75.75h-1.5a.75.75 0 01-.75-.75v-3.086a6.009 6.009 0 01-2.132-1.414l-.259.26a1.475 1.475 0 002.085 2.084l.515-.515a.75.75 0 111.06 1.06l-.515.515a2.975 2.975 0 01-4.206-4.206l.515-.515a.75.75 0 011.06 1.06l-.515.515a1.475 1.475 0 002.085 2.084l.26-.258a6.003 6.003 0 01-3.087-2.132H4.25a.75.75 0 01-.75-.75v-1.5c0-.414.336-.75.75-.75h3.086c.047-.36.089-.716.126-1.07A4.483 4.483 0 0112.5 1H14.5A4.5 4.5 0 0119 5.5z"
-															clip-rule="evenodd"
-														/>
-													</svg>
-													<span class="font-bold">{tool.function_name}</span>
-												</div>
-												<div
-													tabindex="0"
-													class="dropdown-content z-[100] mt-1 w-80 rounded-box border border-base-300 bg-base-100 p-2 shadow-xl sm:w-96"
-												>
-													<div class="flex flex-col gap-1 p-2">
-														<div class="text-xs font-bold text-base-content/60">Arguments</div>
-														<pre
-															class="max-h-60 overflow-y-auto rounded bg-base-200/50 p-2 font-mono text-xs break-words whitespace-pre-wrap text-primary">{formatToolArgs(
-																tool.args
-															)}</pre>
+													<path
+														fill-rule="evenodd"
+														d="M19 5.5a4.5 4.5 0 01-4.791 4.483c-.353.048-.709.09-1.07.126V12.5c0 .414-.336.75-.75.75h-1.5a.75.75 0 01-.75-.75v-3.086a6.009 6.009 0 01-2.132-1.414l-.259.26a1.475 1.475 0 002.085 2.084l.515-.515a.75.75 0 111.06 1.06l-.515.515a2.975 2.975 0 01-4.206-4.206l.515-.515a.75.75 0 011.06 1.06l-.515.515a1.475 1.475 0 002.085 2.084l.26-.258a6.003 6.003 0 01-3.087-2.132H4.25a.75.75 0 01-.75-.75v-1.5c0-.414.336-.75.75-.75h3.086c.047-.36.089-.716.126-1.07A4.483 4.483 0 0112.5 1H14.5A4.5 4.5 0 0119 5.5z"
+														clip-rule="evenodd"
+													/>
+												</svg>
+												<span class="font-bold">{tool.function_name}</span>
+											</div>
+											<div
+												tabindex="0"
+												class="dropdown-content z-[100] mt-1 w-80 rounded-box border border-base-300 bg-base-100 p-2 shadow-xl sm:w-96"
+											>
+												<div class="flex flex-col gap-1 p-2">
+													<div class="flex items-center justify-between">
+														<span class="text-xs font-bold text-base-content/60">Arguments</span>
+
+														<button
+															class="btn text-primary btn-ghost btn-xs"
+															on:click={() => copyToPlayground(tool.function_name, tool.args)}
+															title="Edit in Playground"
+														>
+															<svg
+																xmlns="http://www.w3.org/2000/svg"
+																viewBox="0 0 20 20"
+																fill="currentColor"
+																class="mr-1 h-3 w-3"
+															>
+																<path
+																	d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z"
+																/>
+															</svg>
+															Edit
+														</button>
 													</div>
+													<pre
+														class="max-h-60 overflow-y-auto rounded bg-base-200/50 p-2 font-mono text-xs break-words whitespace-pre-wrap text-primary">{formatToolArgs(
+															tool.args
+														)}</pre>
 												</div>
 											</div>
-										{/each}
-									{:else}
-										<div class="group relative inline-block">
+										</div>
+									{/each}
+									{#if message.tool_deltas && message.tool_deltas.length > 0}
+										<div class="group/badge relative inline-block">
 											<div
 												class="inline-flex animate-pulse items-center gap-2 rounded-full bg-base-200 px-3 py-1.5 text-xs text-base-content/60"
 											>
 												<span class="loading loading-xs loading-dots"></span>
 												Calling tools...
 											</div>
-											{#if message.tool_deltas && message.tool_deltas.length > 0}
+											<div
+												class="pointer-events-none absolute top-full left-0 z-50 mt-2 w-64 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 sm:w-80"
+											>
 												<div
-													class="pointer-events-none absolute top-full left-0 z-50 mt-2 w-64 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100 sm:w-80"
+													class="rounded-lg border border-base-300 bg-base-100 p-3 text-xs shadow-xl"
 												>
 													<div
-														class="rounded-lg border border-base-300 bg-base-100 p-3 text-xs shadow-xl"
+														class="flex items-center justify-between font-bold text-base-content/60"
 													>
-														<div class="mb-1 font-bold text-base-content/60">Live Output</div>
+														<span>Live Output</span>
+														<span class="h-2 w-2 animate-pulse rounded-full bg-success"></span>
+													</div>
+													<div
+														class="relative rounded border border-base-content/5 bg-base-300 p-2
+    font-mono text-[10px]
+    leading-tight text-base-content/70"
+													>
+														<pre
+															class="max-h-40 overflow-y-auto break-all whitespace-pre-wrap"
+															style="scrollbar-width: none; -ms-overflow-style: none;"
+															use:scrollToBottomAction={message.tool_deltas}>{message.tool_deltas}</pre>
 
 														<div
-															class="max-h-40 overflow-y-auto font-mono break-all whitespace-pre-wrap opacity-70"
-															style="scrollbar-width: none; -ms-overflow-style: none;"
-															use:scrollToBottomAction={message.tool_deltas}
-														>
-															<style>
-																div::-webkit-scrollbar {
-																	display: none;
-																}
-															</style>
-															{message.tool_deltas}
-														</div>
+															class="pointer-events-none absolute top-0 right-0 left-0 h-4 bg-gradient-to-b from-base-300 to-transparent"
+														></div>
 													</div>
 												</div>
-											{/if}
+											</div>
 										</div>
+									{:else if message.tool_use.length === 0}
+										<span class="loading loading-xs loading-dots opacity-50"></span>
 									{/if}
 								</div>
 							{/if}
@@ -417,6 +556,7 @@
 				{/if}
 
 				{#if message.owner === 'Tools'}
+					{@const toolCallId = message.owner.tool_call_id}
 					<details
 						class="group collapse-arrow collapse mb-4 ml-10 rounded-r-lg border-l-4 border-secondary bg-base-200/30 shadow-sm"
 					>

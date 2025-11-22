@@ -11,12 +11,13 @@
 	import ChatInput from '$lib/components/ChatInput.svelte';
 	import ErrorToast from '$lib/components/ErrorToast.svelte';
 	import ImageModal from '$lib/components/ImageModal.svelte';
+	import ArtifactPanel from '$lib/components/ArtifactPanel.svelte';
 
 	// 引入服务和状态
 	import * as ChatService from '$lib/services/chatService';
 	import { isDragging, isLoading as isGlobalLoading } from '$lib/stores/chatStore';
 	import SettingsModal from '$lib/components/SettingsModal.svelte';
-	import { showSettings } from '$lib/stores/settingsStore';
+	import { showSettings, showArtifacts } from '$lib/stores/settingsStore';
 
 	initI18n();
 
@@ -78,7 +79,7 @@
 		<ChatSidebar />
 
 		<div
-			class="relative drawer-content flex h-screen flex-col"
+			class="drawer-content flex h-screen flex-row overflow-hidden"
 			role="region"
 			on:dragover={handleDragOver}
 			on:dragleave={handleDragLeave}
@@ -86,40 +87,70 @@
 		>
 			<ErrorToast />
 
-			<div class="navbar bg-base-100 lg:hidden">
-				<div class="flex-none">
-					<label for="my-drawer" class="btn btn-square btn-ghost">
+			<div class="relative flex min-w-0 flex-1 flex-col transition-all duration-300">
+				<div class="navbar min-h-[3rem] border-b border-base-300 bg-base-100 p-0 pr-2">
+					<div class="flex-none lg:hidden">
+						<label for="my-drawer" class="btn btn-square btn-ghost btn-sm">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								fill="none"
+								viewBox="0 0 24 24"
+								class="inline-block h-5 w-5 stroke-current"
+								><path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M4 6h16M4 12h16M4 18h16"
+								></path></svg
+							>
+						</label>
+					</div>
+
+					<div class="flex-1 px-2">
+						<a href="/" class="btn text-lg font-bold btn-ghost btn-sm lg:hidden">QLens</a>
+					</div>
+
+					<button
+						class="btn gap-2 btn-ghost btn-sm"
+						class:btn-active={$showArtifacts}
+						on:click={() => ($showArtifacts = !$showArtifacts)}
+						title="Toggle Artifacts Panel"
+					>
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
 							fill="none"
 							viewBox="0 0 24 24"
-							class="inline-block h-5 w-5 stroke-current"
+							stroke-width="1.5"
+							stroke="currentColor"
+							class="h-5 w-5"
 						>
 							<path
 								stroke-linecap="round"
 								stroke-linejoin="round"
-								stroke-width="2"
-								d="M4 6h16M4 12h16M4 18h16"
-							></path>
+								d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6z"
+							/>
 						</svg>
-					</label>
+						<span class="hidden sm:inline">Artifacts</span>
+					</button>
 				</div>
-				<div class="flex-1">
-					<a href="/" class="btn text-xl btn-ghost">QLens</a>
-				</div>
+
+				<MessageList on:imageClick={(e) => showImageModal(e.detail)} />
+
+				<ChatInput bind:this={chatInputComponent} />
+
+				{#if $isDragging}
+					<div
+						class="pointer-events-none absolute inset-0 z-50 m-4 flex items-center justify-center rounded-xl border-4 border-dashed border-primary bg-primary/20 backdrop-blur-sm"
+					>
+						<span class="text-2xl font-bold text-primary drop-shadow-md"
+							>{$_('drag_zone') || 'Drop files here'}</span
+						>
+					</div>
+				{/if}
 			</div>
 
-			<MessageList on:imageClick={(e) => showImageModal(e.detail)} />
-
-			<ChatInput bind:this={chatInputComponent} />
-
-			{#if $isDragging}
-				<div
-					class="pointer-events-none absolute inset-0 z-50 flex items-center justify-center border-4 border-dashed border-primary bg-primary/20"
-				>
-					<span class="text-2xl font-bold text-primary">{$_('drag_zone') || 'Drop files here'}</span
-					>
-				</div>
+			{#if $showArtifacts}
+				<ArtifactPanel on:imageClick={(e) => showImageModal(e.detail)} />
 			{/if}
 		</div>
 	</div>
