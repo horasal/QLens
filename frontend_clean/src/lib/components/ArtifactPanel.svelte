@@ -2,37 +2,149 @@
 	import { currentChat } from '$lib/stores/chatStore';
 	import * as ChatService from '$lib/services/chatService';
 	import { onMount } from 'svelte';
-	import type { ToolDescription, MessageContent, Message } from '$lib/types';
-	import MarkdownBlock from './MarkdownBlock.svelte';
+	import type { ToolDescription, Message, MessageContent } from '$lib/types';
 	import { playgroundState } from '$lib/stores/artifactStore';
 	import { createEventDispatcher } from 'svelte';
 	import { toasts } from '$lib/stores/chatStore';
 	import { themeStore } from '$lib/stores/themeStore';
 	import CodeMirror from 'svelte-codemirror-editor';
 	import { javascript } from '@codemirror/lang-javascript';
+	import { json } from '@codemirror/lang-json';
 	import { oneDark } from '@codemirror/theme-one-dark';
-	import SchemaForm from './SchemaForm.svelte';
+	import SmartForm from './SmartForm.svelte'; // 使用新的表单组件
 
 	const dispatch = createEventDispatcher();
-	let formValue: Record<string, any> = {};
-	let toolArgsCache: Record<string, string> = {};
-	let activeTab: 'gallery' | 'playground' = 'gallery';
 
-	// Playground State
+	let activeTab: 'gallery' | 'playground' = 'gallery';
 	let tools: ToolDescription[] = [];
-	let selectedToolName = 'js_interpreter';
-	let inputArgs = '';
+	let selectedToolName = '';
 	let isRunning = false;
 	let runResult: Message | null = null;
 
+	// --- 1. 状态管理重构：隔离不同工具的状态 ---
+	type ToolDraft = {
+		argsJsonString: string; // CodeMirror 的真值
+		argsObject: any;       // SmartForm 的真值
+		mode: 'code' | 'form'; // 当前偏好模式
+	};
+	// 缓存：toolName -> Draft
+	let toolDrafts: Record<string, ToolDraft> = {};
+
+	// 获取当前工具的草稿，如果不存在则初始化
+	function getDraft(toolName: string): ToolDraft {
+		if (!toolDrafts[toolName]) {
+			// 默认初始化为空对象或空字符串
+			const isJs = toolName === 'js_interpreter';
+			toolDrafts[toolName] = {
+				argsJsonString: isJs ? '' : '{}',
+				argsObject: {},
+				mode: isJs ? 'code' : 'form'
+			};
+		}
+		return toolDrafts[toolName];
+	}
+
+	// 当前选中的工具的草稿（响应式）
+	$: currentDraft = selectedToolName ? getDraft(selectedToolName) : null;
+	$: currentToolDef = tools.find((t) => t.name_for_model === selectedToolName);
+
+	// 当 CodeMirror 文本改变时
+	function handleCodeChange(newVal: string) {
+		if (!currentDraft) return;
+		currentDraft.argsJsonString = newVal;
+
+		// 尝试同步给 Form (如果是 JSON)
+		if (selectedToolName !== 'js_interpreter') {
+			try {
+				currentDraft.argsObject = JSON.parse(newVal);
+			} catch {
+				// 解析失败不强行同步，允许用户输入中间状态
+			}
+		}
+	}
+
+	// 当 SmartForm 对象改变时
+	function handleFormChange(newVal: any) {
+		if (!currentDraft) return;
+		currentDraft.argsObject = newVal;
+		// 同步回 CodeMirror 文本
+		currentDraft.argsJsonString = JSON.stringify(newVal, null, 2);
+	}
+
+	// --- Gallery Logic ---
 	type GalleryItem = {
 		src: string;
 		alt: string;
-		code?: string; // 关联的生成代码/参数
-		toolName?: string; // 关联的工具名
+		code: string;
+		toolName: string;
+		msgId: string;
 	};
-
 	let galleryImages: GalleryItem[] = [];
+
+	$: if ($currentChat) {
+		const images: GalleryItem[] = [];
+		const msgs = $currentChat.messages;
+
+		msgs.forEach((msg, i) => {
+			// 兼容逻辑：检查 role 是否为 tool (对象 or 字符串)
+			const isTool = typeof msg.owner === 'string' ? msg.owner === 'Tools' : msg.owner.role === 'tool';
+			if (!isTool) return;
+
+			// 尝试寻找对应的调用参数
+			// 1. 如果是新架构，msg.owner 包含 tool_call_id
+			// 2. 如果是旧架构，回溯上一条 Assistant
+			let relatedCode = '';
+			let relatedToolName = '';
+
+			// 新架构：通过 tool_call_id 查找
+			if (typeof msg.owner === 'object' && msg.owner.role === 'tool') {
+				const callId = msg.owner.tool_call_id;
+				// 在之前的消息里找 tool_use.use_id === callId
+				// 倒序查找最近的
+				for (let j = i - 1; j >= 0; j--) {
+					const m = msgs[j];
+					const uses = m.tool_use || [];
+					const found = uses.find(u => u.use_id === callId);
+					if (found) {
+						relatedCode = found.args;
+						relatedToolName = found.function_name;
+						break;
+					}
+				}
+			} else {
+				// 旧架构回退逻辑 (Prev msg is assistant)
+				const prevMsg = msgs[i - 1];
+				if (prevMsg && (prevMsg.owner === 'Assistant' || (typeof prevMsg.owner === 'object' && prevMsg.owner.role === 'assistant'))) {
+					if (prevMsg.tool_use.length > 0) {
+						const last = prevMsg.tool_use[prevMsg.tool_use.length - 1];
+						relatedCode = last.args;
+						relatedToolName = last.function_name;
+					}
+				}
+			}
+
+			msg.content.forEach((item) => {
+				if ('ImageRef' in item) {
+					images.push({
+						src: `/api/image/${item.ImageRef[0]}`,
+						alt: item.ImageRef[1] || 'Image',
+						code: relatedCode,
+						toolName: relatedToolName,
+						msgId: msg.id
+					});
+				} else if ('ImageBin' in item) {
+					images.push({
+						src: `data:image/png;base64,${item.ImageBin[0]}`,
+						alt: 'Base64',
+						code: relatedCode,
+						toolName: relatedToolName,
+						msgId: msg.id
+					});
+				}
+			});
+		});
+		galleryImages = images.reverse();
+	}
 
 	function copyUUID(e: MouseEvent, src: string) {
 		const uuid = src.split('/').pop();
@@ -42,111 +154,44 @@
 		}
 	}
 
-	function handleToolSwitch(e: Event) {
-		const newToolName = (e.target as HTMLSelectElement).value;
-
-		if (selectedToolName) {
-			toolArgsCache[selectedToolName] = inputArgs;
-		}
-
-		selectedToolName = newToolName;
-
-		if (toolArgsCache[newToolName] !== undefined) {
-			inputArgs = toolArgsCache[newToolName];
-		} else {
-			inputArgs = newToolName === 'js_interpreter' ? '' : '{}';
-		}
-
-		if (selectedToolName !== 'js_interpreter') {
-			try {
-				formValue = JSON.parse(inputArgs || '{}');
-			} catch {
-				formValue = {};
-			}
-		}
-	}
-
 	function loadIntoPlayground(item: GalleryItem) {
 		activeTab = 'playground';
-
-		if (selectedToolName && item.toolName && selectedToolName !== item.toolName) {
-			toolArgsCache[selectedToolName] = inputArgs;
-		}
-
+		// 切换工具
 		if (item.toolName) selectedToolName = item.toolName;
 
-		let codeToLoad = item.code || '';
-		try {
-			const parsed = JSON.parse(codeToLoad);
-			codeToLoad = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
-		} catch {}
-
-		inputArgs = codeToLoad;
-
-		toolArgsCache[selectedToolName] = inputArgs;
+		// 强制覆写该工具的 Draft
+		const d = getDraft(selectedToolName);
+		d.argsJsonString = item.code;
 
 		if (selectedToolName !== 'js_interpreter') {
 			try {
-				formValue = JSON.parse(inputArgs);
+				d.argsObject = JSON.parse(item.code);
+				// 如果 JSON 解析成功，格式化一下代码
+				d.argsJsonString = JSON.stringify(d.argsObject, null, 2);
 			} catch {
-				formValue = {};
+				d.argsObject = {};
 			}
 		}
+
+		// 触发更新
+		toolDrafts = { ...toolDrafts };
 	}
 
-	// 获取当前选中的 Tool 对象
-	$: currentToolDef = tools.find((t) => t.name_for_model === selectedToolName);
-
-	$: if ($currentChat) {
-		const images: GalleryItem[] = [];
-		const msgs = $currentChat.messages;
-
-		msgs.forEach((msg, i) => {
-			if (msg.owner !== 'Tools') return;
-
-			// 尝试寻找上下文：通常前一条消息(Assistant)包含了 Tool Call
-			// 注意：这是简化逻辑，严谨做法应该匹配 tool_call_id，但线性对话通常 i-1 就是
-			const prevMsg = msgs[i - 1];
-			let relatedCode = '';
-			let relatedTool = '';
-
-			if (prevMsg && prevMsg.owner === 'Assistant' && prevMsg.tool_use.length > 0) {
-				// 假设图片是由最后一个工具调用产生的
-				// (如果是并行调用，这里可能需要更复杂的匹配，先做简单版)
-				const lastTool = prevMsg.tool_use[prevMsg.tool_use.length - 1];
-				relatedCode = lastTool.args;
-				relatedTool = lastTool.function_name;
-			}
-
-			msg.content.forEach((item) => {
-				if ('ImageRef' in item) {
-					images.push({
-						src: `/api/image/${item.ImageRef[0]}`,
-						alt: item.ImageRef[1],
-						code: relatedCode,
-						toolName: relatedTool
-					});
-				} else if ('ImageBin' in item) {
-					images.push({
-						src: `data:image/png;base64,${item.ImageBin[0]}`,
-						alt: 'Base64 Image',
-						code: relatedCode,
-						toolName: relatedTool
-					});
-				}
-			});
-		});
-		galleryImages = images.reverse();
-	}
 	$: editorTheme = $themeStore ? oneDark : [];
+
+	// 监听从聊天界面点击 "Edit" 传过来的 State
 	$: if ($playgroundState) {
 		activeTab = 'playground';
-		selectedToolName = $playgroundState.toolName;
-		try {
-			const parsed = JSON.parse($playgroundState.args);
-			inputArgs = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
-		} catch {
-			inputArgs = $playgroundState.args;
+		const { toolName, args } = $playgroundState;
+		selectedToolName = toolName;
+
+		const d = getDraft(toolName);
+		d.argsJsonString = args;
+		if (toolName !== 'js_interpreter') {
+			try {
+				d.argsObject = JSON.parse(args);
+				d.argsJsonString = JSON.stringify(d.argsObject, null, 2);
+			} catch {}
 		}
 		playgroundState.set(null);
 	}
@@ -159,96 +204,64 @@
 	});
 
 	async function handleRun() {
+		if (!currentDraft) return;
 		isRunning = true;
 		runResult = null;
-		const result = await ChatService.runTool(selectedToolName, inputArgs);
-		if (result) {
-			runResult = result;
+		try {
+			const result = await ChatService.runTool(selectedToolName, currentDraft.argsJsonString);
+			if (result) runResult = result;
+		} catch (e) {
+			console.error(e);
+		} finally {
+			isRunning = false;
 		}
-		isRunning = false;
 	}
 
 	function handleGalleryClick(src: string) {
-		dispatch('imageClick', src); // 派发事件给 +page.svelte
+		dispatch('imageClick', src);
 	}
 </script>
 
 <div class="flex h-full w-80 flex-col border-l border-base-300 bg-base-100 shadow-xl lg:w-96">
 	<div class="flex-none bg-base-200 p-2">
-		<div class="tabs-boxed tabs bg-base-100">
-			<button
-				class="tab flex-1"
-				class:tab-active={activeTab === 'gallery'}
-				on:click={() => (activeTab = 'gallery')}>Gallery</button
-			>
-			<button
-				class="tab flex-1"
-				class:tab-active={activeTab === 'playground'}
-				on:click={() => (activeTab = 'playground')}>Playground</button
-			>
+		<div class="tabs-boxed tabs tabs-sm bg-base-100">
+			<button class="tab flex-1" class:tab-active={activeTab === 'gallery'} on:click={() => (activeTab = 'gallery')}>Gallery</button>
+			<button class="tab flex-1" class:tab-active={activeTab === 'playground'} on:click={() => (activeTab = 'playground')}>Playground</button>
 		</div>
 	</div>
+
 	<div class="relative flex min-h-0 flex-1 flex-col">
+
 		{#if activeTab === 'gallery'}
 			<div class="flex-1 overflow-y-auto p-4">
 				{#if galleryImages.length === 0}
-					<div class="flex h-full items-center justify-center text-sm text-base-content/50">
-						No images generated yet.
-					</div>
+					<div class="flex h-full items-center justify-center text-sm text-base-content/50">No images generated yet.</div>
 				{:else}
 					<div class="grid grid-cols-2 gap-2">
-						{#each galleryImages as img}
-							<div
-								class="group relative aspect-square overflow-hidden rounded-lg border border-base-300 bg-base-200"
-							>
+						{#each galleryImages as img (img.src)}
+							<div class="group relative aspect-square overflow-hidden rounded-lg border border-base-300 bg-base-200">
 								<img
 									src={img.src}
 									alt={img.alt}
 									class="h-full w-full cursor-zoom-in object-cover transition-transform group-hover:scale-110"
 									on:click={() => handleGalleryClick(img.src)}
 								/>
-
-								<div
-									class="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100"
-								>
+								<div class="absolute right-1 top-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
 									{#if img.code}
 										<button
-											class="btn btn-square border-0 bg-base-100/80 text-base-content shadow-sm backdrop-blur-sm btn-xs hover:bg-primary hover:text-white"
+											class="btn btn-square btn-xs border-0 bg-base-100/80 backdrop-blur-sm hover:bg-primary hover:text-white"
 											on:click|stopPropagation={() => loadIntoPlayground(img)}
 											title="Edit Code"
 										>
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												viewBox="0 0 20 20"
-												fill="currentColor"
-												class="h-3 w-3"
-											>
-												<path
-													d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z"
-												/>
-												<path
-													d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z"
-												/>
-											</svg>
+											<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3 w-3"><path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" /></svg>
 										</button>
 									{/if}
-
 									<button
-										class="btn btn-square border-0 bg-base-100/80 text-primary shadow-sm backdrop-blur-sm btn-xs hover:bg-white"
+										class="btn btn-square btn-xs border-0 bg-base-100/80 text-primary backdrop-blur-sm hover:bg-white"
 										on:click|stopPropagation={(e) => copyUUID(e, img.src)}
 										title="Copy UUID"
 									>
-										<svg
-											xmlns="http://www.w3.org/2000/svg"
-											viewBox="0 0 20 20"
-											fill="currentColor"
-											class="h-3 w-3"
-										>
-											<path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
-											<path
-												d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z"
-											/>
-										</svg>
+										<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-3 w-3"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>
 									</button>
 								</div>
 							</div>
@@ -258,133 +271,98 @@
 			</div>
 		{/if}
 
-		{#if activeTab === 'playground'}
-			<div class="flex h-full flex-col gap-4 p-4">
+		{#if activeTab === 'playground' && currentDraft}
+			<div class="flex h-full flex-col gap-3 p-4">
 				<div class="form-control flex-none">
-					<label class="label text-xs font-bold">Select Tool</label>
+					<label class="label py-1 text-xs font-bold text-base-content/70">Select Tool</label>
 					<select
-						class="select-bordered select w-full select-sm"
+						class="select select-bordered select-sm w-full text-xs"
 						bind:value={selectedToolName}
-						on:change={handleToolSwitch}
 					>
 						{#each tools as tool}
 							<option value={tool.name_for_model}>{tool.name_for_human || tool.name_for_model}</option>
 						{/each}
 					</select>
 				</div>
-				<div
-					class="form-control flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-base-300"
-				>
-					<div
-						class="flex items-center justify-between border-b border-base-300 bg-base-200 px-3 py-2 text-xs font-bold"
-					>
-						<span>Input Parameters</span>
-						<span class="font-mono text-[10px] opacity-50">
-							{selectedToolName === 'js_interpreter' ? 'JavaScript' : 'JSON Schema'}
-						</span>
+
+				<div class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-base-300 bg-base-100">
+					<div class="flex items-center justify-between border-b border-base-300 bg-base-200 px-3 py-1.5">
+						<span class="text-xs font-bold opacity-70">Input Parameters</span>
+
+						{#if selectedToolName !== 'js_interpreter'}
+							<div class="join">
+								<button
+									class="btn join-item btn-xs {currentDraft.mode === 'form' ? 'btn-active btn-neutral' : ''}"
+									on:click={() => currentDraft.mode = 'form'}>Form</button>
+								<button
+									class="btn join-item btn-xs {currentDraft.mode === 'code' ? 'btn-active btn-neutral' : ''}"
+									on:click={() => currentDraft.mode = 'code'}>Code</button>
+							</div>
+						{:else}
+							<span class="text-[10px] font-mono opacity-50">JavaScript</span>
+						{/if}
 					</div>
+
 					<div class="relative min-h-0 flex-1 overflow-hidden">
 						{#if selectedToolName === 'js_interpreter'}
 							<CodeMirror
-								bind:value={inputArgs}
+								value={currentDraft.argsJsonString}
+								on:change={(e) => handleCodeChange(e.detail)}
 								lang={javascript()}
 								theme={editorTheme}
 								styles={{
-									'&': {
-										height: '100%' /* 强制占满父容器高度 */,
-										width: '100%'
-									},
-									'.cm-editor': {
-										height: '100%' /* 编辑器本体也占满 */
-									},
-									'.cm-scroller': {
-										overflow: 'auto' /* 允许滚动 */
-									}
+									"&": { height: "100%" },
+									".cm-scroller": { overflow: "auto" }
 								}}
 							/>
-						{:else if currentToolDef && currentToolDef.parameters}
-							<div class="h-full overflow-y-auto p-3">
-								{#key selectedToolName}
-									<SchemaForm schema={currentToolDef.parameters} bind:value={formValue} />
-								{/key}
-							</div>
 						{:else}
-							<textarea bind:value={inputArgs} class="textarea h-full w-full resize-none"
-							></textarea>
+							{#if currentDraft.mode === 'form' && currentToolDef && currentToolDef.parameters}
+								<div class="h-full overflow-y-auto p-3">
+									<SmartForm
+										schema={currentToolDef.parameters}
+										rootSchema={currentToolDef.parameters}
+										value={currentDraft.argsObject}
+										on:change={(e) => handleFormChange(e.detail)}
+									/>
+								</div>
+							{:else}
+								<CodeMirror
+									value={currentDraft.argsJsonString}
+									on:change={(e) => handleCodeChange(e.detail)}
+									lang={json()}
+									theme={editorTheme}
+									styles={{
+										"&": { height: "100%" },
+										".cm-scroller": { overflow: "auto" }
+									}}
+								/>
+							{/if}
 						{/if}
 					</div>
 				</div>
+
 				<div class="flex-none">
-					<button class="btn btn-sm btn-primary" disabled={isRunning} on:click={handleRun}>
+					<button class="btn btn-sm btn-primary w-full" disabled={isRunning} on:click={handleRun}>
 						{#if isRunning}
-							<span class="loading loading-xs loading-spinner"></span>
+							<span class="loading loading-spinner loading-xs"></span>
 						{:else}
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 20 20"
-								fill="currentColor"
-								class="mr-1 h-4 w-4"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
-									clip-rule="evenodd"
-								/>
-							</svg>
+							<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="mr-1 h-4 w-4"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" /></svg>
 						{/if}
 						Run Tool
 					</button>
 				</div>
 
 				{#if runResult}
-					<div class="flex max-h-[40%] min-h-0 flex-none flex-col">
-						<div class="divider my-1 text-xs">RESULT</div>
-						<div
-							class="flex-1 overflow-y-auto rounded-lg border border-base-300 bg-base-200/50 p-3 text-xs"
-						>
+					<div class="flex max-h-[35%] min-h-0 flex-none flex-col border-t border-base-300 pt-2">
+						<div class="mb-1 text-[10px] font-bold uppercase text-base-content/50">Execution Result</div>
+						<div class="flex-1 overflow-y-auto rounded-md bg-base-200 p-2 text-xs">
 							{#each runResult.content as item}
 								{#if 'Text' in item}
-									<div class="max-h-60 overflow-y-auto font-mono break-all whitespace-pre-wrap">
-										{item.Text}
-									</div>
+									<div class="break-all font-mono whitespace-pre-wrap">{item.Text}</div>
 								{:else if 'ImageRef' in item}
-									<img
-										src={`/api/image/${item.ImageRef[0]}`}
-										alt="Result"
-										class="mt-2 cursor-grab rounded border border-base-300 bg-base-100 active:cursor-grabbing"
-										draggable="true"
-										on:dragstart={(e) => {
-											if (e.dataTransfer) {
-												const markdown = `![Generated Image](/api/image/${item.ImageRef[0]})`;
-												e.dataTransfer.setData('text/plain', markdown);
-												e.dataTransfer.effectAllowed = 'copy';
-
-												e.dataTransfer.setData(
-													'DownloadURL',
-													`image/png:image.png:${window.location.origin}/api/image/${item.ImageRef[0]}`
-												);
-											}
-										}}
-									/>
+									<img src={`/api/image/${item.ImageRef[0]}`} class="mt-1 max-h-40 rounded border border-base-300" alt="Res" />
 								{:else if 'ImageBin' in item}
-									<img
-										src={`data:image/png;base64,${item.ImageBin[0]}`}
-										alt="Result"
-										class="mt-2 rounded border border-base-300 bg-base-100"
-										draggable="true"
-										on:dragstart={(e) => {
-											if (e.dataTransfer) {
-												const markdown = `![Generated Image](/api/image/${item.ImageRef[0]})`;
-												e.dataTransfer.setData('text/plain', markdown);
-												e.dataTransfer.effectAllowed = 'copy';
-
-												e.dataTransfer.setData(
-													'DownloadURL',
-													`image/png:image.png:${window.location.origin}/api/image/${item.ImageRef[0]}`
-												);
-											}
-										}}
-									/>
+									<img src={`data:image/png;base64,${item.ImageBin[0]}`} class="mt-1 max-h-40 rounded border border-base-300" alt="Res" />
 								{/if}
 							{/each}
 						</div>

@@ -17,7 +17,30 @@
 	let editingMessageId: string | null = null;
 	let editText = '';
 	let hoveredToolId: string | null = null;
+	let activeTabMap: Record<string, string> = {};
 
+	function selectTab(groupId: string, msgId: string) {
+		activeTabMap[groupId] = msgId;
+		activeTabMap = { ...activeTabMap }; // 触发 Svelte 响应式更新
+	}
+
+	function getToolResultGroup(messages: any[], index: number) {
+		const current = messages[index];
+		const prev = messages[index - 1];
+
+		if (current.owner.role !== 'tool') return null;
+		if (prev && prev.owner.role === 'tool') return null;
+
+		const group = [current];
+		for (let i = index + 1; i < messages.length; i++) {
+			if (messages[i].owner.role === 'tool') {
+				group.push(messages[i]);
+			} else {
+				break;
+			}
+		}
+		return group;
+	}
 	function stringToColor(str: string) {
 		let hash = 0;
 		for (let i = 0; i < str.length; i++) {
@@ -132,7 +155,7 @@
 
 			// 计算最后一条消息的正文长度 (忽略 reasoning)
 			let currentContentLength = 0;
-			if (lastMsg && lastMsg.owner === 'Assistant') {
+			if (lastMsg && lastMsg.owner.role === 'assistant') {
 				currentContentLength = lastMsg.content.reduce(
 					(acc, item) => acc + ('Text' in item ? item.Text.length : 0),
 					0
@@ -238,8 +261,8 @@
 		</div>
 	{:else}
 		<div class="mx-auto flex max-w-4xl flex-col gap-6">
-			{#each $currentChat.messages as message}
-				{#if message.owner === 'User'}
+			{#each $currentChat.messages as message, i (message.id)}
+				{#if message.owner.role === 'user'}
 					<div class="group chat-end chat">
 						<div class="chat-header mb-1 opacity-0 transition-opacity group-hover:opacity-100">
 							{#if editingMessageId !== message.id && !$processingChatIds.has($currentChat.id)}
@@ -327,8 +350,7 @@
 						</div>
 					</div>
 				{/if}
-
-				{#if message.owner === 'Assistant'}
+				{#if message.owner.role === 'assistant'}
 					<div class="group flex gap-4 pl-2">
 						<div class="mt-1 flex-shrink-0">
 							<div
@@ -356,10 +378,9 @@
 								{@const reasoningText = message.reasoning
 									.map((r) => ('Text' in r ? r.Text : ''))
 									.join('')}
-
 								<details
 									class="group/think bg-base-50 collapse-arrow collapse rounded-lg border border-base-200"
-									open={message.content.length === 0}
+									open={message.content.length === 0 && message.tool_use.length === 0}
 								>
 									<summary
 										class="collapse-title min-h-0 py-2 text-xs font-medium text-base-content/60 transition-colors hover:text-primary"
@@ -371,7 +392,6 @@
 											{/if}
 										</div>
 									</summary>
-
 									<div class="collapse-content">
 										<div
 											class="max-h-96 overflow-y-auto rounded-md bg-base-200/30 p-2 text-xs text-base-content/70"
@@ -384,7 +404,6 @@
 													</div>
 												{/if}
 											{/each}
-
 											<div class="h-2"></div>
 										</div>
 									</div>
@@ -394,17 +413,29 @@
 							{#if (message.tool_deltas && message.tool_deltas.length > 0) || message.tool_use.length > 0}
 								<div class="relative z-10 my-2 flex flex-wrap gap-2">
 									{#each message.tool_use as tool}
+										{@const toolColor = stringToColor(tool.use_id)}
+										{@const borderColor = stringToBorderColor(tool.use_id)}
+										{@const isActive = hoveredToolId === tool.use_id}
+
 										<div class="dropdown dropdown-start dropdown-bottom">
 											<div
 												tabindex="0"
 												role="button"
-												class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-base-300 bg-base-200 px-3 py-1.5 font-mono text-xs text-base-content/80 transition-colors hover:border-secondary hover:text-secondary"
+												class="inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-xs transition-all duration-200 hover:opacity-80"
+												style="
+																background-color: {toolColor};
+																border-color: {borderColor};
+																color: {borderColor};
+																{isActive ? 'transform: scale(1.05); box-shadow: 0 2px 8px ' + toolColor : ''}
+															"
+												on:mouseenter={() => (hoveredToolId = tool.use_id)}
+												on:mouseleave={() => (hoveredToolId = null)}
 											>
 												<svg
 													xmlns="http://www.w3.org/2000/svg"
 													viewBox="0 0 20 20"
 													fill="currentColor"
-													class="h-3 w-3"
+													class="h-3 w-3 opacity-70"
 												>
 													<path
 														fill-rule="evenodd"
@@ -413,7 +444,11 @@
 													/>
 												</svg>
 												<span class="font-bold">{tool.function_name}</span>
+												<span class="ml-1 rounded bg-white/50 px-1 text-[9px] opacity-70"
+													>#{getShortId(tool.use_id)}</span
+												>
 											</div>
+
 											<div
 												tabindex="0"
 												class="dropdown-content z-[100] mt-1 w-80 rounded-box border border-base-300 bg-base-100 p-2 shadow-xl sm:w-96"
@@ -421,7 +456,6 @@
 												<div class="flex flex-col gap-1 p-2">
 													<div class="flex items-center justify-between">
 														<span class="text-xs font-bold text-base-content/60">Arguments</span>
-
 														<button
 															class="btn text-primary btn-ghost btn-xs"
 															on:click={() => copyToPlayground(tool.function_name, tool.args)}
@@ -432,11 +466,10 @@
 																viewBox="0 0 20 20"
 																fill="currentColor"
 																class="mr-1 h-3 w-3"
-															>
-																<path
+																><path
 																	d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z"
-																/>
-															</svg>
+																/></svg
+															>
 															Edit
 														</button>
 													</div>
@@ -448,6 +481,7 @@
 											</div>
 										</div>
 									{/each}
+
 									{#if message.tool_deltas && message.tool_deltas.length > 0}
 										<div class="group/badge relative inline-block">
 											<div
@@ -465,23 +499,13 @@
 													<div
 														class="flex items-center justify-between font-bold text-base-content/60"
 													>
-														<span>Live Output</span>
-														<span class="h-2 w-2 animate-pulse rounded-full bg-success"></span>
+														<span>Live Output</span><span
+															class="h-2 w-2 animate-pulse rounded-full bg-success"
+														></span>
 													</div>
-													<div
-														class="relative rounded border border-base-content/5 bg-base-300 p-2
-    font-mono text-[10px]
-    leading-tight text-base-content/70"
-													>
-														<pre
-															class="max-h-40 overflow-y-auto break-all whitespace-pre-wrap"
-															style="scrollbar-width: none; -ms-overflow-style: none;"
-															use:scrollToBottomAction={message.tool_deltas}>{message.tool_deltas}</pre>
-
-														<div
-															class="pointer-events-none absolute top-0 right-0 left-0 h-4 bg-gradient-to-b from-base-300 to-transparent"
-														></div>
-													</div>
+													<pre
+														class="max-h-40 overflow-y-auto rounded bg-base-300 p-2 font-mono text-[10px] break-all whitespace-pre-wrap"
+														use:scrollToBottomAction={message.tool_deltas}>{message.tool_deltas}</pre>
 												</div>
 											</div>
 										</div>
@@ -490,7 +514,6 @@
 									{/if}
 								</div>
 							{/if}
-
 							<div class="prose prose-sm max-w-none text-base-content">
 								{#each message.content as item}
 									{#if 'Text' in item}
@@ -501,13 +524,13 @@
 									{/if}
 								{/each}
 							</div>
+
 							<div
 								class="flex items-center gap-2 pt-2 opacity-0 transition-opacity group-hover:opacity-100"
 							>
 								<button
 									class="btn gap-1 text-base-content/50 btn-ghost btn-xs"
 									on:click={() => {
-										// 拼接所有 Text 内容
 										const raw = message.content
 											.filter((c) => 'Text' in c)
 											.map((c) => c.Text)
@@ -520,14 +543,12 @@
 										viewBox="0 0 20 20"
 										fill="currentColor"
 										class="h-3 w-3"
-									>
-										<path
+										><path
 											d="M7 3.5A1.5 1.5 0 018.5 2h3.879a1.5 1.5 0 011.06.44l3.122 3.12A1.5 1.5 0 0117 6.622V12.5a1.5 1.5 0 01-1.5 1.5h-1v-3.379a3 3 0 00-.879-2.121L10.5 5.379A3 3 0 008.379 4.5H7v-1z"
-										/>
-										<path
+										/><path
 											d="M4.5 6A1.5 1.5 0 003 7.5v9A1.5 1.5 0 004.5 18h7.5a1.5 1.5 0 001.5-1.5v-5.879a.75.75 0 00-.22-.53L9.78 6.53A.75.75 0 009.25 6H4.5z"
-										/>
-									</svg>
+										/></svg
+									>
 									Copy Raw
 								</button>
 								<button
@@ -541,83 +562,129 @@
 										viewBox="0 0 20 20"
 										fill="currentColor"
 										class="h-3 w-3"
-									>
-										<path
+										><path
 											fill-rule="evenodd"
 											d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z"
 											clip-rule="evenodd"
-										/>
-									</svg>
+										/></svg
+									>
 									Regenerate
 								</button>
 							</div>
 						</div>
 					</div>
 				{/if}
+				{#if message.owner.role === 'tool'}
+					{@const toolGroup = getToolResultGroup($currentChat.messages, i)}
 
-				{#if message.owner === 'Tools'}
-					{@const toolCallId = message.owner.tool_call_id}
-					<details
-						class="group collapse-arrow collapse mb-4 ml-10 rounded-r-lg border-l-4 border-secondary bg-base-200/30 shadow-sm"
-					>
-						<summary
-							class="collapse-title min-h-0 py-2 text-xs font-bold tracking-wider text-secondary/80 uppercase transition-colors hover:bg-base-200/50"
+					{#if toolGroup}
+						{@const groupId = message.id}
+						{@const activeMsgId = activeTabMap[groupId] || toolGroup[0].id}
+						{@const activeMsg = toolGroup.find((m) => m.id === activeMsgId) || toolGroup[0]}
+
+						<details
+							class="group collapse-arrow collapse mb-2 ml-12 rounded-lg border border-base-200 bg-base-100 shadow-sm"
+							open={true}
 						>
-							<div class="flex items-center gap-2">
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									viewBox="0 0 20 20"
-									fill="currentColor"
-									class="h-4 w-4"
-								>
-									<path
-										fill-rule="evenodd"
-										d="M2 10a.75.75 0 01.75-.75h12.59l-2.1-1.95a.75.75 0 111.02-1.1l3.5 3.25a.75.75 0 010 1.1l-3.5 3.25a.75.75 0 11-1.02-1.1l2.1-1.95H2.75A.75.75 0 012 10z"
-										clip-rule="evenodd"
-									/>
-								</svg>
-								<span>{$_('tool_result')}</span>
-							</div>
-						</summary>
+							<summary
+								class="collapse-title min-h-0 py-2 pr-4 text-xs font-medium text-base-content/60 transition-colors hover:bg-base-200/50 hover:text-primary"
+							>
+								<div class="flex items-center gap-2">
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 20 20"
+										fill="currentColor"
+										class="h-4 w-4"
+									>
+										<path
+											fill-rule="evenodd"
+											d="M2 10a.75.75 0 01.75-.75h12.59l-2.1-1.95a.75.75 0 111.02-1.1l3.5 3.25a.75.75 0 010 1.1l-3.5 3.25a.75.75 0 11-1.02-1.1l2.1-1.95H2.75A.75.75 0 012 10z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+									<span class="tracking-wider uppercase">Tool Outputs</span>
+									<span class="badge badge-ghost badge-sm font-mono text-[10px]"
+										>{toolGroup.length} results</span
+									>
+								</div>
+							</summary>
 
-						<div class="collapse-content text-sm">
-							<div class="flex flex-col gap-3 pt-2">
-								{#if message.content.some((item) => 'ImageRef' in item || 'ImageBin' in item)}
-									<div class="flex flex-wrap gap-2">
-										{#each message.content as item}
-											{#if 'ImageRef' in item || 'ImageBin' in item}
+							<div class="collapse-content px-0 pb-0">
+								<div class="flex flex-col">
+									<div
+										class="bg-base-50/50 scrollbar-hide flex items-center gap-2 overflow-x-auto border-b border-base-200 px-2 py-1.5"
+									>
+										{#each toolGroup as msg}
+											{@const toolCallId = msg.owner.tool_call_id}
+											{@const borderColor = stringToBorderColor(toolCallId)}
+											{@const isActive = activeMsg.id === msg.id}
+
+											<button
+												class="relative flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-medium transition-all hover:bg-base-200"
+												style="
+                                    border-color: {borderColor};
+                                    {isActive
+													? `background-color: ${borderColor}15; color: ${borderColor};`
+													: 'border-color: transparent; opacity: 0.6;'}
+                                "
+												on:click={() => selectTab(groupId, msg.id)}
+												on:mouseenter={() => (hoveredToolId = toolCallId)}
+												on:mouseleave={() => (hoveredToolId = null)}
+											>
 												<div
-													class="relative overflow-hidden rounded-md border border-base-300 bg-base-100 transition-all hover:scale-105 hover:shadow-md"
-												>
-													<img
-														src={getImageUrl(item)}
-														alt="Tool result"
-														class="h-32 w-32 cursor-pointer object-cover"
-														on:click={() => {
-															const url = getImageUrl(item);
-															if (url) onImageClick(url);
-														}}
-													/>
-												</div>
-											{/if}
+													class="h-1.5 w-1.5 rounded-full"
+													style="background-color: {borderColor}"
+												></div>
+												<span class="font-mono">#{getShortId(toolCallId)}</span>
+											</button>
 										{/each}
 									</div>
-								{/if}
 
-								{#each message.content as item}
-									{#if 'Text' in item}
-										<div
-											class="relative overflow-hidden rounded bg-base-300/50 p-3 font-mono text-xs text-base-content/80"
-										>
-											<div class="max-h-60 overflow-y-auto break-words whitespace-pre-wrap">
-												{item.Text}
+									<div class="bg-base-100 p-3">
+										{#key activeMsg.id}
+											<div class="animate-in fade-in flex flex-col gap-2 duration-200">
+												{#if activeMsg.content.some((item) => 'ImageRef' in item || 'ImageBin' in item)}
+													<div class="grid grid-cols-3 gap-2">
+														{#each activeMsg.content as item}
+															{#if 'ImageRef' in item || 'ImageBin' in item}
+																<div
+																	class="bg-base-50 aspect-square overflow-hidden rounded border border-base-200"
+																>
+																	<img
+																		src={getImageUrl(item)}
+																		alt="Result"
+																		class="h-full w-full cursor-pointer object-cover transition-transform hover:scale-105"
+																		on:click={() => {
+																			const url = getImageUrl(item);
+																			if (url) onImageClick(url);
+																		}}
+																	/>
+																</div>
+															{/if}
+														{/each}
+													</div>
+												{/if}
+
+												{#each activeMsg.content as item}
+													{#if 'Text' in item}
+														<div
+															class="relative overflow-hidden rounded bg-base-200/30 p-2 font-mono text-xs text-base-content/80"
+														>
+															<div
+																class="scrollbar-thin max-h-60 overflow-y-auto break-words whitespace-pre-wrap"
+															>
+																{item.Text}
+															</div>
+														</div>
+													{/if}
+												{/each}
 											</div>
-										</div>
-									{/if}
-								{/each}
+										{/key}
+									</div>
+								</div>
 							</div>
-						</div>
-					</details>
+						</details>
+					{/if}
 				{/if}
 			{/each}
 			<div id="chat-container-end" class="h-12"></div>

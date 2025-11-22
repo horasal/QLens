@@ -51,7 +51,7 @@ export async function regenerateMessage(messageId: string) {
 		if (index !== -1) {
 			const targetMsg = chat.messages[index];
 
-			if (targetMsg.owner === 'Assistant' || targetMsg.owner === 'Tools') {
+			if (targetMsg.owner.role === 'assistant' || targetMsg.owner.role === 'tool') {
 				chat.messages = chat.messages.slice(0, index);
 			} else {
 				chat.messages = chat.messages.slice(0, index + 1);
@@ -399,7 +399,8 @@ export async function sendMessage(text: string, files: PreviewFile[]) {
 		const fullContent = [...imageRefs, ...textContent];
 
 		const userMsg: Message = {
-			owner: 'User',
+  		id: crypto.randomUUID(),
+      owner: { role: 'user' },
 			reasoning: [],
 			content: fullContent,
 			tool_use: []
