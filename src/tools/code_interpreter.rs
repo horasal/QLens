@@ -1,10 +1,16 @@
 use crate::blob::{BlobStorage, BlobStorageError};
-use crate::parse_sourcecode_args;
+use crate::{FN_RAWHTML, FN_RAWSVG, parse_sourcecode_args};
 use crate::{MessageContent, Tool, ToolDescription, tools::FONT_DATA};
+use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use deno_error::JsError;
+use image::Luma;
+use qrcode::QrCode;
 use resvg::{tiny_skia, usvg};
+use rqrr::PreparedImage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::time::Instant;
 use std::io::Cursor;
 use std::sync::{Arc, mpsc};
 use uuid::Uuid;
@@ -28,42 +34,49 @@ impl Tool for JsInterpreter {
         });
         let capabilities = generate_capabilities_prompt();
         let description = format!(
-            r##"Executes JavaScript code in a V8 sandbox with DOM support.
+            r##"Executes JavaScript code in a V8 sandbox with DOM and Top-Level async/await support.
         **Capabilities:**
         {capabilities}
         **I/O & Files:**
         - **Print:** `console.log/error(...)` or `return ...`
-        - **Images:** Images can be stored to the database by function `save_svg(svg_string):UUID` or `save_image(png_or_bmp: UInt8Array):UUID`.
-        - **Image Access:** You can read these images using `fs.readFileSync(uuid)` as if they were local files.
-          - Convert any valid image to png with `convert_to_png(UInt8Array)`.
-        - **MemFS**: You have 50MB MemFS as a storage in your program.
+        - **Special Functions:**
+           - `save_svg(svg_string):uuid`: Save and view SVG
+           - `save_blob(Schema, UInt8Array):uuid`, `type Schema = 'asset' | 'image'`: Save blob and view saved image after return
+           - `load_blob(Schema, uuid: String):Uint8Array`: Load blob
+           - `convert_to_png(UInt8Array):UInt8Array`: Convert any valid image to png
+           - `QRCode.save(str,'png'|'svg'):uuid`, `QRCode.decode(uuid|UInt8Array):string`
 
         **Restrictions:**
         - NO Network (`fetch` is disabled). Use `curl_url` tool for networking.
-        - NO Canvas. Use d3.js or UPNG for graphics.
-        - Syntax: Top-level `await` is supported."##
-        );
+        - NO Canvas. Use d3.js or UPNG for graphics."##);
 
         ToolDescription {
             name_for_model: "js_interpreter".to_string(),
             name_for_human: "Javascript代码执行工具".to_string(),
             description_for_model: description,
             parameters: raw_schema,
-            args_format: "输入内容**直接作为**js代码执行".to_string(),
+            args_format: "输入内容为独立js代码,不能有任何'`等包裹".to_string(),
         }
     }
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
         let code = parse_sourcecode_args(args)?;
-        let db = self.db.clone();
-        let result = tokio::task::spawn_blocking(move || run_code(db, code)).await??;
+        let image = self.image.clone();
+        let asset = self.asset.clone();
+        let result = tokio::task::spawn_blocking(move || run_code(image, asset, code)).await??;
 
         let mut v = vec![MessageContent::Text(
             result.terminal + "\nReturn: " + &result.return_value,
         )];
-        for (idx, &uuid) in result.uuids.iter().enumerate() {
+        for (idx, &uuid) in result.uuids_img.iter().enumerate() {
             v.push(MessageContent::ImageRef(
                 uuid,
                 format!("JS Generated Image#{}", idx),
+            ));
+        }
+        for (idx, &uuid) in result.uuids_asset.iter().enumerate() {
+            v.push(MessageContent::AssetRef(
+                uuid,
+                format!("JS Generated Asset#{}", idx),
             ));
         }
         Ok(v)
@@ -75,12 +88,21 @@ struct CodeResult {
     return_value: String,
     terminal: String,
     #[serde(skip)]
-    uuids: Vec<Uuid>,
+    uuids_img: Vec<Uuid>,
+    #[serde(skip)]
+    uuids_asset: Vec<Uuid>,
 }
 
 struct LogSender(mpsc::Sender<String>);
-struct ImageSender(mpsc::Sender<Uuid>);
-struct DbHandle(Arc<dyn BlobStorage>);
+struct UuidSender {
+    image: mpsc::Sender<Uuid>,
+    asset: mpsc::Sender<Uuid>,
+}
+struct DbHandle {
+    image: Arc<dyn BlobStorage>,
+    asset: Arc<dyn BlobStorage>,
+}
+struct TimeOrigin(Instant);
 
 #[op2(fast)]
 fn console_op_print(state: &mut OpState, #[string] msg: String, is_err: bool) {
@@ -93,7 +115,7 @@ fn console_op_print(state: &mut OpState, #[string] msg: String, is_err: bool) {
 #[derive(Debug, thiserror::Error, JsError)]
 #[class(generic)]
 enum ImageError {
-    #[error("image binary is empty")]
+    #[error("Blob does not exist")]
     ImageEmpty,
     #[error("Invalid UUID {0}")]
     InvalidUuid(#[from] uuid::Error),
@@ -103,9 +125,8 @@ enum ImageError {
     MaxTries(usize),
     #[error("Invalid base64 {0}")]
     InvalidBase64(#[from] base64::DecodeError),
-    #[allow(dead_code)]
-    #[error("Uuid collision occured, please try again")]
-    UuidCollision,
+    #[error("Invalid schema {0}, expect image or asset")]
+    InvalidSchema(String),
     #[error("Invalid SVG data {0}")]
     InvalidSVG(#[from] usvg::Error),
     #[error("Unable to create Pixmap with size {0}x{1}")]
@@ -114,13 +135,19 @@ enum ImageError {
     InternalErrorConvertPixMapToPng,
     #[error("Image IO Error, unable to save as PNG {0}.")]
     ImageIOError(#[from] image::error::ImageError),
+    #[error("QRCode does not contain any valid data.")]
+    NoDataInQRCode,
+    #[error("QRCode decode error {0}.")]
+    QRCodeDecodeError(#[from] rqrr::DeQRError),
+    #[error("QRCode encode error {0}.")]
+    QRCodeEncodeError(#[from] qrcode::types::QrError),
 }
 
 struct Counter {
     put_count: usize,
 }
 
-const MAX_IMAGE_PUT_TRIES: usize = 10;
+const MAX_BLOB_PUT_TRIES: usize = 20;
 
 #[op2]
 #[string]
@@ -167,9 +194,9 @@ fn op_save_svg(state: &mut OpState, #[string] svg_data: &str) -> Result<String, 
         .map_err(|_| ImageError::InternalErrorConvertPixMapToPng)?;
 
     let db = state.borrow::<DbHandle>();
-    match db.0.save(&output_buf) {
+    match db.image.save(&output_buf) {
         Ok(uuid) => {
-            if let Err(e) = state.borrow::<ImageSender>().0.send(uuid.clone()) {
+            if let Err(e) = state.borrow::<UuidSender>().image.send(uuid.clone()) {
                 tracing::warn!("Error to send svg from javascript back to llm, {}.", e)
             }
             Ok(uuid.to_string())
@@ -178,12 +205,31 @@ fn op_save_svg(state: &mut OpState, #[string] svg_data: &str) -> Result<String, 
     }
 }
 
+enum Schema {
+    Asset,
+    Image,
+}
+
+impl Schema {
+    fn parse(input: &str) -> Result<Self, ImageError> {
+        match input.trim().to_lowercase().as_str() {
+            "asset" | "binary" | "bin" => Ok(Self::Asset),
+            "image" | "img" | "svg" | "png" | "jpeg" => Ok(Self::Image),
+            _ => return Err(ImageError::InvalidSchema(input.to_string())),
+        }
+    }
+}
+
 #[op2]
 #[string]
-fn op_save_image(state: &mut OpState, #[buffer] img: &[u8]) -> Result<String, ImageError> {
-    let _ = image::guess_format(img)?;
+fn op_save_blob(
+    state: &mut OpState,
+    #[string] schema: String,
+    #[buffer] img: &[u8],
+) -> Result<String, ImageError> {
+    let schema = Schema::parse(&schema)?;
     if let Some(mut c) = state.try_take::<Counter>() {
-        if c.put_count >= MAX_IMAGE_PUT_TRIES {
+        if c.put_count >= MAX_BLOB_PUT_TRIES {
             return Err(ImageError::MaxTries(c.put_count));
         }
         c.put_count += 1;
@@ -192,14 +238,28 @@ fn op_save_image(state: &mut OpState, #[buffer] img: &[u8]) -> Result<String, Im
         state.put(Counter { put_count: 1 });
     }
     let db = state.borrow::<DbHandle>();
-    match db.0.save(&img) {
-        Ok(uuid) => {
-            if let Err(e) = state.borrow::<ImageSender>().0.send(uuid.clone()) {
-                tracing::warn!("Error to saved image from javascript back to llm, {}.", e)
+    match schema {
+        Schema::Image => {
+            let _ = image::guess_format(img)?;
+            match db.image.save(&img) {
+                Ok(uuid) => {
+                    if let Err(e) = state.borrow::<UuidSender>().image.send(uuid.clone()) {
+                        tracing::warn!("Error to saved image from javascript back to llm, {}.", e)
+                    }
+                    Ok(uuid.to_string())
+                }
+                Err(e) => Err(ImageError::DatabaseError(e)),
             }
-            Ok(uuid.to_string())
         }
-        Err(e) => Err(ImageError::DatabaseError(e)),
+        Schema::Asset => match db.asset.save(&img) {
+            Ok(uuid) => {
+                if let Err(e) = state.borrow::<UuidSender>().asset.send(uuid.clone()) {
+                    tracing::warn!("Error to saved asset from javascript back to llm, {}.", e)
+                }
+                Ok(uuid.to_string())
+            }
+            Err(e) => Err(ImageError::DatabaseError(e)),
+        },
     }
 }
 
@@ -213,14 +273,36 @@ fn op_convert_to_png(_: &mut OpState, #[buffer] img: &[u8]) -> Result<Vec<u8>, I
 }
 
 #[op2]
+#[string]
+fn op_qrcode_decode(#[buffer] data: &[u8]) -> Result<String, ImageError> {
+    let img = image::load_from_memory(data)?;
+
+    let gray_img = img.to_luma8();
+    let mut prepared_img = PreparedImage::prepare(gray_img);
+    let grids = prepared_img.detect_grids();
+    if grids.is_empty() {
+        return Err(ImageError::NoDataInQRCode);
+    }
+    let (_, content) = grids[0].decode()
+        .map_err(|e| ImageError::QRCodeDecodeError(e))?;
+
+    Ok(content)
+}
+
+#[op2]
 #[buffer]
-fn op_retrieve_image(
+fn op_load_blob(
     state: &mut OpState,
+    #[string] schema: String,
     #[string] uuid_str: String,
 ) -> Result<Vec<u8>, ImageError> {
-    let db = state.borrow::<DbHandle>();
+    let schema = Schema::parse(&schema)?;
     let uuid = uuid::Uuid::parse_str(&uuid_str).map_err(|e| ImageError::InvalidUuid(e))?;
-    match db.0.get(uuid) {
+    let db = state.borrow::<DbHandle>();
+    match match schema {
+        Schema::Asset => db.asset.get(uuid),
+        Schema::Image => db.image.get(uuid),
+    } {
         Ok(Some(bytes)) => Ok(bytes),
         Ok(None) => Err(ImageError::ImageEmpty),
         Err(e) => Err(ImageError::DatabaseError(e)),
@@ -228,30 +310,110 @@ fn op_retrieve_image(
 }
 
 #[op2(fast)]
-fn op_contain_image(state: &mut OpState, #[string] uuid_str: String) -> Result<bool, ImageError> {
-    let db = state.borrow::<DbHandle>();
+fn op_contain_blob(
+    state: &mut OpState,
+    #[string] schema: String,
+    #[string] uuid_str: String,
+) -> Result<bool, ImageError> {
+    let schema = Schema::parse(&schema)?;
     let uuid = uuid::Uuid::parse_str(&uuid_str).map_err(|e| ImageError::InvalidUuid(e))?;
-    match db.0.get(uuid) {
+    let db = state.borrow::<DbHandle>();
+    match match schema {
+        Schema::Asset => db.asset.get(uuid),
+        Schema::Image => db.image.get(uuid),
+    } {
         Ok(Some(_)) => Ok(true),
         Ok(None) => Ok(false),
         Err(e) => Err(ImageError::DatabaseError(e)),
     }
 }
 
+#[op2]
+#[buffer]
+fn op_qrcode_png(#[string] text: String) -> Result<Vec<u8>, ImageError> {
+    let code = QrCode::new(text.as_bytes())?;
+
+    let image = code.render::<Luma<u8>>()
+        .min_dimensions(200, 200)
+        .build();
+
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut cursor = Cursor::new(&mut bytes);
+
+    image::DynamicImage::ImageLuma8(image)
+        .write_to(&mut cursor, image::ImageFormat::Png)?;
+
+    Ok(bytes)
+}
+
+#[op2]
+#[string]
+fn op_qrcode_svg(#[string] text: String) -> Result<String, ImageError> {
+    let code = QrCode::new(text.as_bytes())?;
+
+    let svg = code.render()
+        .min_dimensions(200, 200)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .build();
+
+    Ok(svg)
+}
+
+#[op2]
+#[buffer]
+fn op_text_encode(#[string] text: String) -> Vec<u8> {
+    text.into_bytes()
+}
+
+#[op2]
+#[string]
+fn op_text_decode(#[buffer] bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).to_string()
+}
+
+#[op2]
+#[string]
+fn op_base64_encode(#[buffer] data: &[u8]) -> String {
+    BASE64_STANDARD.encode(data)
+}
+
+#[op2]
+#[buffer]
+fn op_base64_decode(#[string] data: String) -> Result<Vec<u8>, ImageError> {
+    Ok(BASE64_STANDARD.decode(data)?)
+}
+
+
+#[op2(fast)]
+fn op_performance_now(state: &mut OpState) -> f64 {
+    let origin = state.borrow::<TimeOrigin>().0;
+    origin.elapsed().as_secs_f64() * 1000.0
+}
+
 extension!(
     sandbox_ext,
     ops = [
         console_op_print,
-        op_retrieve_image,
-        op_save_image,
+        op_load_blob,
+        op_save_blob,
         op_save_svg,
-        op_contain_image,
-        op_convert_to_png
+        op_contain_blob,
+        op_convert_to_png,
+        op_text_encode,
+        op_text_decode,
+        op_base64_decode,
+        op_base64_encode,
+        op_performance_now,
+        op_qrcode_png,
+        op_qrcode_svg,
+        op_qrcode_decode,
     ],
 );
 
 pub struct JsInterpreter {
-    db: Arc<dyn BlobStorage>,
+    image: Arc<dyn BlobStorage>,
+    asset: Arc<dyn BlobStorage>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,6 +441,7 @@ struct LibraryConfig {
     src: &'static str,          // 源码内容
     category: LibCategory,      // 分类
     prompt_hint: &'static str,  // Prompt 中的展示文本 (例如: "`_` (Lodash)")
+    after_hook: Option<&'static str>,   // Polyfill用的配置脚本
 }
 const LOAD_SOURCE: &[LibraryConfig] = &[
     // --- Environment ---
@@ -288,13 +451,45 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         src: include_str!("prelude/linkedom.bundle.js"),
         category: LibCategory::Environment,
         prompt_hint: "`document`, `window`, `svg` (LinkeDOM simulated)",
-    },
-    LibraryConfig {
-        require_name: "base64",
-        global_var: "Base64",
-        src: include_str!("prelude/base64.min.js"),
-        category: LibCategory::Environment,
-        prompt_hint: "`Base64` (Standard Base64)",
+        after_hook: Some(r###"
+        if (globalThis.LinkeDOM) {
+            const { parseHTML, XMLSerializer} = globalThis.LinkeDOM;
+            const dom = parseHTML('<!doctype html><html><body></body></html>');
+            globalThis.window = dom.window;
+            globalThis.document = dom.document;
+            globalThis.Element = dom.HTMLElement;
+            globalThis.SVGElement = dom.SVGElement;
+            globalThis.Node = dom.Node;
+            if (XMLSerializer) {
+                globalThis.XMLSerializer = XMLSerializer;
+            } else if (dom.window && dom.window.XMLSerializer) {
+                globalThis.XMLSerializer = dom.window.XMLSerializer;
+            } else {
+                Deno.core.ops.console_op_print("Notice: Using simple XMLSerializer polyfill.\n", true);
+                globalThis.XMLSerializer = class {
+                    serializeToString(node) {
+                        return node.outerHTML || "";
+                    }
+                };
+            }
+
+            globalThis.requestAnimationFrame = (callback) => {
+                return setTimeout(callback, 0);
+            };
+            globalThis.cancelAnimationFrame = (id) => {
+                clearTimeout(id);
+            };
+            const originalSetAttribute = globalThis.Element.prototype.setAttribute;
+            globalThis.Element.prototype.setAttribute = function(name, value) {
+                originalSetAttribute.call(this, name, value);
+                return this;
+            };
+            if (globalThis.SVGElement) {
+                    globalThis.SVGElement.prototype.setAttribute = globalThis.Element.prototype.setAttribute;
+            }
+        } else {
+            Deno.core.ops.console_op_print("stderr: LinkeDOM not loaded!\n", true);
+        }"###),
     },
     // --- Data Processing ---
     LibraryConfig {
@@ -302,21 +497,29 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         global_var: "_",
         src: include_str!("prelude/lodash.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`_` (Lodash)",
+        prompt_hint: r##"`_` (Lodash)
+const users=[{n:'a',g:'tech'},{n:'b',g:'hr'},{n:'c',g:'tech'}];
+console.log(_.groupBy(users,'g'));"##,
+        after_hook: Some(r#"
+        if (typeof _ !== "undefined") {
+            globalThis.structuredClone = _.cloneDeep;
+        }"#),
     },
     LibraryConfig {
         require_name: "mathjs",
         global_var: "math",
         src: include_str!("prelude/math.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`math` (Mathjs)",
+        prompt_hint: "`math` (Mathjs);math.evaluate('12.7 cm to inch').toString()",
+        after_hook: None,
     },
     LibraryConfig {
         require_name: "dayjs",
         global_var: "dayjs",
         src: include_str!("prelude/dayjs.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`dayjs`",
+        prompt_hint: "`dayjs`,dayjs().format('YYYY-MM-DD HH:mm:ss')",
+        after_hook: None,
     },
     LibraryConfig {
         require_name: "papaparse",
@@ -324,20 +527,33 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         src: include_str!("prelude/papaparse.min.js"),
         category: LibCategory::DataProcessing,
         prompt_hint: "`Papa` (CSV)",
+        after_hook: None,
     },
     LibraryConfig {
         require_name: "arquero",
         global_var: "aq",
         src: include_str!("prelude/arquero.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`aq` (Arquero - Dataframes)",
+        prompt_hint: r##"`aq` (Arquero - Dataframes),
+const dt=aq.table({a:[1,2,3],b:[4,5,6]});
+console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
+        after_hook: None,
     },
     LibraryConfig {
         require_name: "mustache",
         global_var: "Mustache",
         src: include_str!("prelude/mustache.min.js"),
         category: LibCategory::Utility,
-        prompt_hint: "`Mustache` (Templating)",
+        prompt_hint: r##"`Mustache` (Templating), const htmlStr=Mustache.render(template,{title:"A",list:["1","2"]});"##,
+        after_hook: None,
+    },
+    LibraryConfig {
+        require_name: "nerdamer",
+        global_var: "nerdamer",
+        src: include_str!("prelude/nerdamer.min.js"),
+        category: LibCategory::DataProcessing,
+        prompt_hint: "`nerdamer`. *Symbolic math/calculus/algebra solver `nerdamer('solve(x^2=4, x)').toString()`*",
+        after_hook: None,
     },
     // --- Visualization ---
     LibraryConfig {
@@ -345,27 +561,46 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         global_var: "d3",
         src: include_str!("prelude/d3.v7.min.js"),
         category: LibCategory::Visualization,
-        prompt_hint: "`d3` (D3.js). *Prefer SVG `svg.node()` OR call `save_svg(html)`*",
+        prompt_hint: "`d3` (D3.js). *Prefer SVG `d3.create('svg')...svg.node().outerHTML`*",
+        after_hook: None,
+    },
+    LibraryConfig {
+        require_name: "vega",
+        global_var: "vega",
+        src: include_str!("prelude/vega.min.js"),
+        category: LibCategory::Visualization,
+        prompt_hint: r##"`vega`&`vegaLite`. Declarative viz with Vega-Lite JSON, width/height must exist in spec.
+const vegaSpec=vegaLite.compile(vlSpec).spec;
+const view=new vega.View(vega.parse(vegaSpec),{renderer:'svg'}).initialize();
+const svg=await view.toSVG();
+        "##,
+        after_hook: None,
+    },
+    LibraryConfig {
+        require_name: "vega-lite",
+        global_var: "vegaLite",
+        src: include_str!("prelude/vega-lite.min.js"),
+        category: LibCategory::Visualization,
+        prompt_hint: "",
+        after_hook: None,
     },
     LibraryConfig {
         require_name: "UPNG",
         global_var: "UPNG",
         src: include_str!("prelude/UPNG.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`UPNG` (PNG encoder/decoder) for fast pixel manipulation",
+        prompt_hint:
+        r##"`UPNG` (PNG encoder/decoder) for pixel manipulation
+const buffer=new Uint8Array([255,0,0,255]).buffer;
+// encode(buffers,width,height,colorDepth)
+const pngBuffer=UPNG.encode([buffer],1,1,0);"##,
+        after_hook: None,
     },
-    //    LibraryConfig {
-    //        require_name: "plot",
-    //        global_var: "Plot",
-    //        src: include_str!("prelude/plot.umd.min.js"),
-    //        category: LibCategory::Visualization,
-    //        prompt_hint: "`Plot` (Observable Plot). *High-level chart API*",
-    //    },
 ];
 
 impl JsInterpreter {
-    pub fn new(db: Arc<dyn BlobStorage>) -> Self {
-        Self { db }
+    pub fn new(image: Arc<dyn BlobStorage>, asset: Arc<dyn BlobStorage>) -> Self {
+        Self { image, asset }
     }
 }
 
@@ -400,7 +635,6 @@ fn generate_capabilities_prompt() -> String {
 
 fn get_env_script() -> &'static str {
     r#"
-    // --- Console (最优先，防止库加载时打印报错看不到) ---
     globalThis.console = {
         log: (...args) => {
             let msg = args.map(String).join(" ");
@@ -410,65 +644,84 @@ fn get_env_script() -> &'static str {
             let msg = args.map(String).join(" ");
             Deno.core.ops.console_op_print("stderr: " + msg + "\n", true);
         },
-        // Table 稍微复杂点，也可以放后面，或者这里给个简单的
+        warn: (...args) => {
+            let msg = args.map(String).join(" ");
+            Deno.core.ops.console_op_print("warn: " + msg + "\n", false);
+        },
+        info: (...args) => {
+            let msg = args.map(String).join(" ");
+            Deno.core.ops.console_op_print("info: " + msg + "\n", false);
+        },
+        trace: (...args) => {
+            let msg = args.map(String).join(" ");
+            Deno.core.ops.console_op_print("trace: " + msg + "\n", false);
+        },
         table: (data) => {
-                Deno.core.ops.console_op_print((Array.isArray(data) ? JSON.stringify(data) : String(data)) + "\n", false);
+            Deno.core.ops.console_op_print((Array.isArray(data) ? JSON.stringify(data) : String(data)) + "\n", false);
         }
     };
-    if (typeof setTimeout === "undefined") {
-                globalThis.setTimeout = (cb, delay, ...args) => {
-                    queueMicrotask(() => {
-                        if (typeof cb === 'string') {
-                            (0, eval)(cb);
-                        } else {
-                            cb(...args);
-                        }
-                    });
-                    return 1;
-                };
-                globalThis.clearTimeout = (_id) => {};
-            }
+    globalThis.console.warn = globalThis.console.log;
+    globalThis.console.info = globalThis.console.log;
+    globalThis.console.trace = globalThis.console.log;
 
-            if (typeof setInterval === "undefined") {
-                globalThis.setInterval = (cb, delay, ...args) => {
-                    // 警告：为了防止 D3 timer 陷入死循环，这里 Mock 为只运行一次
-                    queueMicrotask(() => cb(...args));
-                    return 1;
-                };
-                globalThis.clearInterval = (_id) => {};
-            }
+    if (typeof setTimeout === "undefined") {
+        globalThis.setTimeout = (cb, delay, ...args) => {
+            queueMicrotask(() => {
+                if (typeof cb === 'string') {
+                    (0, eval)(cb);
+                } else {
+                    cb(...args);
+                }});
+            return 1;
+        };
+        globalThis.clearTimeout = (_id) => {};
+    }
+
+    if (typeof setInterval === "undefined") {
+        globalThis.setInterval = (cb, delay, ...args) => {
+            // 警告：为了防止 D3 timer 陷入死循环，这里 Mock 为只运行一次
+            queueMicrotask(() => cb(...args));
+            return 1;
+        };
+        globalThis.clearInterval = (_id) => {};
+    }
     // --- TextEncoder / TextDecoder (UTF-8) ---
     if (typeof TextEncoder === "undefined") {
         globalThis.TextEncoder = class TextEncoder {
-            encode(str) {
-                const arr = [];
-                for (let i = 0; i < str.length; i++) {
-                    let code = str.charCodeAt(i);
-                    if (code < 0x80) arr.push(code);
-                    else if (code < 0x800) {
-                        arr.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
-                    } else if (code < 0xd800 || code >= 0xe000) {
-                        arr.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
-                    } else {
-                        i++;
-                        code = 0x10000 + (((code & 0x3ff) << 10) | (str.charCodeAt(i) & 0x3ff));
-                        arr.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
-                    }
-                }
-                return Uint8Array.from(arr);
+            get encoding() { return "utf-8"; }
+            encode(input) {
+                const str = input === undefined ? "" : String(input);
+                return Deno.core.ops.op_text_encode(str);
+            }
+            encodeInto(source, destination) {
+                const encoded = this.encode(source);
+                const len = Math.min(encoded.length, destination.length);
+                destination.set(encoded.subarray(0, len));
+                return { read: source.length, written: len };
             }
         };
     }
+
     if (typeof TextDecoder === "undefined") {
         globalThis.TextDecoder = class TextDecoder {
-            decode(u8) {
-                const arr = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8);
-                let str = "";
-                const chunk = 8192;
-                for (let i = 0; i < arr.length; i += chunk) {
-                    str += String.fromCharCode.apply(null, arr.subarray(i, i + chunk));
+            constructor(label = "utf-8", options = {}) {
+                // 目前只支持 utf-8，忽略 label
+                this.encoding = "utf-8";
+                this.fatal = options.fatal || false;
+                this.ignoreBOM = options.ignoreBOM || false;
+            }
+            decode(input, options) {
+                let buffer;
+                if (input === undefined) {
+                    buffer = new Uint8Array(0);
+                } else if (input instanceof ArrayBuffer) {
+                    buffer = new Uint8Array(input);
+                } else if (ArrayBuffer.isView(input)) {
+                    buffer = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+                } else {
+                    throw new TypeError("Failed to execute 'decode' on 'TextDecoder': The provided value is not of type '(ArrayBuffer or ArrayBufferView)'");
                 }
-                return decodeURIComponent(escape(str));
+                return Deno.core.ops.op_text_decode(buffer);
             }
         };
     }
@@ -488,9 +741,27 @@ fn get_env_script() -> &'static str {
         };
     }
 
+    globalThis.btoa = (str) => {
+        const encoder = new TextEncoder();
+        return Deno.core.ops.op_base64_encode(str);
+    };
+
+    globalThis.atob = (base64) => {
+        const bytes = Deno.core.ops.op_base64_decode(base64);
+        return new TextDecoder().decode(bytes);
+    };
+
+    globalThis.Base64 = {
+        encode: (data) => {
+            const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+            return Deno.core.ops.op_base64_encode(bytes);
+        },
+        decode: (str) => Deno.core.ops.op_base64_decode(str) // 返回 Uint8Array
+    };
+
     // --- Performance ---
     if (typeof performance === "undefined") {
-        globalThis.performance = { now: () => Date.now() };
+        globalThis.performance = { now: () => Deno.core.ops.op_performance_now() };
     }
 "#
 }
@@ -545,21 +816,35 @@ fn get_setup_script() -> String {
                 return data;
             }
 
-            try {
-                const bytes = globalThis.retrieve_image(key);
-                if (options === 'utf8' || (typeof options === 'object' && options.encoding === 'utf8')) {
-                    return new TextDecoder().decode(bytes);
+            if (globalThis.contain_blob('asset', key)) {
+                try {
+                    const bytes = globalThis.load_blob('asset', key);
+                    if (options === 'utf8' || (typeof options === 'object' && options.encoding === 'utf8')) {
+                        return new TextDecoder().decode(bytes);
+                    }
+                    return bytes;
+                } catch (e) {
+                    throw new Error(`ENOENT: no such file or directory, open '${path}'. \n(Also failed to load blob by UUID from DB)`);
                 }
-                return bytes;
-            } catch (e) {
-                throw new Error(`ENOENT: no such file or directory, open '${path}'. \n(Also failed to retrieve as Image UUID from DB)`);
             }
+
+            if (globalThis.contain_blob('image', key)){
+                try {
+                    const bytes = globalThis.load_blob('image', key);
+                    if (options === 'utf8' || (typeof options === 'object' && options.encoding === 'utf8')) {
+                        return new TextDecoder().decode(bytes);
+                    }
+                    return bytes;
+                } catch (e) {
+                    throw new Error(`ENOENT: no such file or directory, open '${path}'. \n(Also failed to load blob by UUID from DB)`);
+                }
+            }
+            throw new Error(`ENOENT: no such file or directory, open '${path}'. `);
         },
 
         existsSync: (path) => {
             const key = normalizePath(path);
-            // 注意：这里没法 check 数据库，只能 check 内存
-            return vfs.has(key) || globalThis.contain_image(key);
+            return vfs.has(key) || globalThis.contain_blob('image', key) || globalThis.contain_blob('asset', key);
         },
         mkdirSync: () => {},
         statSync: (path) => {
@@ -587,6 +872,17 @@ fn get_setup_script() -> String {
         }
     };
     globalThis.fs = MemFS;
+    globalThis.process = {
+        env: {},
+        version: 'v16.0.0',
+        versions: { node: '16.0.0' },
+        platform: 'browser',
+        browser: true,
+        cwd: () => '/',
+        stdout: { write: (msg) => console.log(msg) },
+        stderr: { write: (msg) => console.error(msg) },
+        nextTick: (cb, ...args) => queueMicrotask(() => cb(...args))
+    };
 "#;
     let require_cases = LOAD_SOURCE
         .iter()
@@ -603,103 +899,122 @@ fn get_setup_script() -> String {
         .map(|lib| lib.require_name)
         .collect::<Vec<_>>()
         .join(", ");
-    r#"
-        {memfs_polyfill}
-        globalThis.require = function(name) {
-            switch(name) {
-                {require_cases}
-                case 'fs': return MemFS;
-                case 'fs/promises': return MemFS.promises;
-                case 'path': return {
-                    resolve: (...args) => args.join('/').replace(/\/+/g, '/'),
-                    join: (...args) => args.join('/').replace(/\/+/g, '/'),
-                    basename: (p) => p.split('/').pop(),
-                    extname: (p) => {{ const i = p.lastIndexOf('.'); return i < 0 ? '' : p.slice(i); }}
-                };
+    r#"if (typeof structuredClone === "undefined" && typeof _ !== "undefined") {
+        globalThis.structuredClone = (value) => _.cloneDeep(value);
+    } else if (typeof structuredClone === "undefined") {
+        globalThis.structuredClone = (value) => JSON.parse(JSON.stringify(value));
+    }
+    {memfs_polyfill}
+    globalThis.require = function(name) {
+        switch(name) {
+            {require_cases}
+            case 'fs': return MemFS;
+            case 'fs/promises': return MemFS.promises;
+            case 'path': return {
+                resolve: (...args) => args.join('/').replace(/\/+/g, '/'),
+                join: (...args) => args.join('/').replace(/\/+/g, '/'),
+                basename: (p) => p.split('/').pop(),
+                extname: (p) => {{ const i = p.lastIndexOf('.'); return i < 0 ? '' : p.slice(i); }}
+            };
 
-                case 'os': return {
-                    platform: () => 'browser',
-                    arch: () => 'x64',
-                    tmpdir: () => '/tmp'
-                };
-                default: throw new Error(`❌ Module '${name}' not found. Available: {available_libs}`);
-            }
-        };
-        if (globalThis.LinkeDOM) {
-            const { parseHTML, XMLSerializer} = globalThis.LinkeDOM;
-            const dom = parseHTML('<!doctype html><html><body></body></html>');
-            globalThis.window = dom.window;
-            globalThis.document = dom.document;
-            globalThis.Element = dom.HTMLElement;
-            globalThis.SVGElement = dom.SVGElement;
-            globalThis.Node = dom.Node;
-            if (XMLSerializer) {
-                globalThis.XMLSerializer = XMLSerializer;
-            } else if (dom.window && dom.window.XMLSerializer) {
-                globalThis.XMLSerializer = dom.window.XMLSerializer;
-            } else {
-                Deno.core.ops.console_op_print("Notice: Using simple XMLSerializer polyfill.\n", true);
-                globalThis.XMLSerializer = class {
-                    serializeToString(node) {
-                        return node.outerHTML || "";
-                    }
-                };
-            }
-
-            globalThis.requestAnimationFrame = (callback) => {
-                return setTimeout(callback, 0);
+            case 'os': return {
+                platform: () => 'browser',
+                arch: () => 'x64',
+                tmpdir: () => '/tmp'
             };
-            globalThis.cancelAnimationFrame = (id) => {
-                clearTimeout(id);
-            };
-            const originalSetAttribute = globalThis.Element.prototype.setAttribute;
-            globalThis.Element.prototype.setAttribute = function(name, value) {
-                originalSetAttribute.call(this, name, value);
-                return this;
-            };
-            if (globalThis.SVGElement) {
-                    globalThis.SVGElement.prototype.setAttribute = globalThis.Element.prototype.setAttribute;
-            }
-        } else {
-            Deno.core.ops.console_op_print("stderr: LinkeDOM not loaded!\n", true);
+            default: throw new Error(`❌ Module '${name}' not found. Available: {available_libs}`);
         }
+    };
+    function op_anybuffer_to_uint8array(data) {
+        let buffer;
+        if (data instanceof ArrayBuffer){
+            buffer = new Uint8Array(data);
+        } else if (data instanceof Array) {
+            buffer = Uint8Array.from(data);
+        } else if (typeof data === 'string') {
+            const binString = atob(data);
+            buffer = new Uint8Array(binString.length);
+            for (let i = 0; i < binString.length; i++) {
+                buffer[i] = binString.charCodeAt(i);
+            }
+        } else if (data instanceof Uint8Array) {
+            buffer = data;
+        }else {
+            buffer = UInt8Array.from(data);
+        }
+        return buffer;
+    }
 
-        function op_anybuffer_to_uint8array(data) {
-            let buffer;
-            if (data instanceof ArrayBuffer) {
-                buffer = new Uint8Array(data);
-            } else if (typeof data === 'string') {
-                const binString = atob(data);
-                buffer = new Uint8Array(binString.length);
-                for (let i = 0; i < binString.length; i++) {
-                    buffer[i] = binString.charCodeAt(i);
+    globalThis.html = (content) => {
+        return "{FN_RAWHTML}" + content;
+    };
+    globalThis.svg = (content) => {
+        return "{FN_RAWSVG}" + content;
+    };
+
+    globalThis.load_blob = (schema, uuid) => Deno.core.ops.op_load_blob(schema, uuid);
+    globalThis.save_blob = (schema, img) => {
+        const img_bin = op_anybuffer_to_uint8array(img);
+        return Deno.core.ops.op_save_blob(schema, img_bin);
+    };
+    globalThis.save_svg = (svg) => Deno.core.ops.op_save_svg(svg);
+    globalThis.contain_blob = (uuid) => Deno.core.ops.op_contain_blob(uuid);
+    globalThis.convert_to_png = (img) => {
+        const img_bin = op_anybuffer_to_uint8array(img);
+        return Deno.core.ops.op_convert_to_png(img_bin);
+    };
+    globalThis.QRCode = {
+        save: (text, format = 'png') => {
+            const str = String(text);
+            if (!str) throw new Error("QRCode: Text cannot be empty");
+            switch (format.toLowerCase()) {
+                case 'png': {
+                    const bytes = Deno.core.ops.op_qrcode_png(str);
+                    return save_blob('image', bytes);
                 }
-            } else {
-                buffer = data;
+                case 'svg': {
+                    const svgStr = Deno.core.ops.op_qrcode_svg(str);
+                    return Deno.core.ops.op_save_svg(svgStr);
+                }
+                default:
+                    throw new Error(`QRCode: Unsupported format '${format}'. Use 'png' or 'svg'.`);
             }
-            return buffer;
+        },
+        encode: (text, format = 'png') => {
+            const str = String(text);
+            switch (format.toLowerCase()) {
+                case 'png': return Deno.core.ops.op_qrcode_png(str); // Returns Uint8Array
+                case 'svg': return Deno.core.ops.op_qrcode_svg(str); // Returns String
+                default: throw new Error(`QRCode: Unsupported format '${format}'`);
+            }
+        },
+        decode: (input) => {
+            let buffer;
+            if (typeof input === 'string') {
+                try {
+                    buffer = globalThis.load_blob('image', input);
+                } catch (e) {
+                    throw new Error("QRCode.decode: Failed to retrieve image from UUID.");
+                }
+            } else if (input instanceof Uint8Array) {
+                buffer = input;
+            } else {
+                throw new Error("QRCode.decode: Input must be Uint8Array or Image UUID string.");
+            }
+            return Deno.core.ops.op_qrcode_decode(buffer);
         }
-
-        globalThis.btoa = Base64.encode;
-        globalThis.atob = Base64.decode;
-
-        globalThis.retrieve_image = (uuid) => Deno.core.ops.op_retrieve_image(uuid);
-        globalThis.save_image = (img) => {
-            const img_bin = op_anybuffer_to_uint8array(img);
-            return Deno.core.ops.op_save_image(img_bin);
-        };
-        globalThis.save_svg = (svg) => Deno.core.ops.op_save_svg(svg);
-        globalThis.contain_image = (uuid) => Deno.core.ops.op_contain_image(uuid);
-        globalThis.convert_to_png = (img) => {
-            const img_bin = op_anybuffer_to_uint8array(img);
-            return Deno.core.ops.op_convert_to_png(img_bin);
-        };
-    "#.replace("{require_cases}", &require_cases)
+    };"#.replace("{require_cases}", &require_cases)
     .replace("{available_libs}", &available_libs)
     .replace("{memfs_polyfill}", &memfs_polyfill)
+    .replace("{RAWHTML}", FN_RAWHTML)
+    .replace("{RAWSVG}", FN_RAWSVG)
 }
 
-fn run_code(db: Arc<dyn BlobStorage>, code: String) -> Result<CodeResult, Error> {
+fn run_code(
+    image: Arc<dyn BlobStorage>,
+    asset: Arc<dyn BlobStorage>,
+    code: String,
+) -> Result<CodeResult, Error> {
     let code = format!(
         r#"(async () => {{
             try {{
@@ -715,6 +1030,7 @@ fn run_code(db: Arc<dyn BlobStorage>, code: String) -> Result<CodeResult, Error>
     );
     let (tx, rx) = mpsc::channel::<String>();
     let (tx_img, rx_img) = mpsc::channel::<Uuid>();
+    let (tx_asset, rx_asset) = mpsc::channel::<Uuid>();
 
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
         extensions: vec![sandbox_ext::init()],
@@ -725,8 +1041,12 @@ fn run_code(db: Arc<dyn BlobStorage>, code: String) -> Result<CodeResult, Error>
         let state = js_runtime.op_state();
         let mut state = state.borrow_mut();
         state.put(LogSender(tx.clone()));
-        state.put(ImageSender(tx_img.clone()));
-        state.put(DbHandle(db));
+        state.put(UuidSender {
+            image: tx_img.clone(),
+            asset: tx_asset.clone(),
+        });
+        state.put(DbHandle { image, asset });
+        state.put(TimeOrigin(Instant::now()));
     }
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -740,6 +1060,10 @@ fn run_code(db: Arc<dyn BlobStorage>, code: String) -> Result<CodeResult, Error>
         if !LOAD_SOURCE.is_empty() {
             for lib in LOAD_SOURCE {
                 js_runtime.execute_script(lib.require_name, lib.src)?;
+                if let Some(hook) = lib.after_hook {
+                    let hook_name = format!("{}_after_hook", lib.require_name);
+                    js_runtime.execute_script(hook_name, hook)?;
+                }
             }
         }
         let setup_script = get_setup_script();
@@ -778,12 +1102,15 @@ fn run_code(db: Arc<dyn BlobStorage>, code: String) -> Result<CodeResult, Error>
     drop(js_runtime);
     drop(tx);
     drop(tx_img);
+    drop(tx_asset);
 
     let logs: String = rx.into_iter().collect();
-    let uuids: Vec<Uuid> = rx_img.into_iter().collect();
+    let uuids_img: Vec<Uuid> = rx_img.into_iter().collect();
+    let uuids_asset: Vec<Uuid> = rx_asset.into_iter().collect();
     Ok(CodeResult {
         return_value: res,
         terminal: logs,
-        uuids: uuids,
+        uuids_img: uuids_img,
+        uuids_asset: uuids_asset,
     })
 }

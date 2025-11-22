@@ -223,6 +223,8 @@ async fn main() -> Result<()> {
             "/api/history/{id}",
             get(get_chat_handler).delete(delete_chat_handler),
         )
+        .route("/api/asset/{id}", get(download_asset_handler))
+        .route("/api/asset", post(upload_asset_handler))
         .route("/api/image/{id}", get(download_image))
         .route("/api/image", post(upload_image))
         .fallback(static_handler)
@@ -613,7 +615,7 @@ async fn get_chat_handler(State(state): State<Arc<AppState>>, Path(uuid): Path<U
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct UploadImageResponse {
+pub struct UploadResponse {
     file: String,
     uuid: Uuid,
 }
@@ -641,6 +643,81 @@ async fn download_image(
         }
     }
 }
+
+async fn download_asset_handler(
+    State(state): State<Arc<AppState>>,
+    Path(uuid): Path<Uuid>,
+) -> impl IntoResponse {
+    match state.llm.get_asset(uuid) {
+        Ok(Some(bytes)) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                CONTENT_TYPE,
+                "application/octet-stream".parse().unwrap()
+            );
+            (headers, bytes).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "Asset not found").into_response(),
+        Err(e) => {
+            tracing::error!("Failed to retrieve asset {}: {}", uuid, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
+        }
+    }
+}
+
+async fn upload_asset_handler(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+    let mut responses = Vec::new();
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let file_name = field
+                    .file_name()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "unknown_file".to_string()); // 备用名称
+
+                tracing::debug!("开始接收文件: {}", file_name);
+
+                let data = match field.bytes().await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        tracing::warn!("Failed to read stream {}: {}", file_name, e);
+                        let error_msg = format!("Failed to read data for {}: {}", file_name, e);
+                        return (StatusCode::BAD_REQUEST, error_msg).into_response();
+                    }
+                };
+                let uuid = match state.llm.save_asset(&data) {
+                    Ok(uuid) => uuid,
+                    Err(e) => {
+                        tracing::error!("Unable save {} to database: {}", file_name, e);
+                        let error_msg = "Failed to save asset to database".to_string();
+                        return (StatusCode::INTERNAL_SERVER_ERROR, error_msg).into_response();
+                    }
+                };
+
+                responses.push(UploadResponse {
+                    file: file_name,
+                    uuid,
+                });
+            }
+            Ok(None) => {
+                break;
+            }
+            Err(e) => {
+                // 客户端发送的 multipart stream 格式错误或连接中断
+                tracing::warn!("Failed to parse multipart stream : {}", e);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid multipart stream: {}", e),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    Json(responses).into_response()
+}
+
+
 
 fn guess_content_type(input_data: &[u8]) -> Result<&str, anyhow::Error> {
     let format = image::guess_format(&input_data)?;
@@ -683,7 +760,7 @@ async fn upload_image(State(state): State<Arc<AppState>>, mut multipart: Multipa
                     }
                 };
 
-                responses.push(UploadImageResponse {
+                responses.push(UploadResponse {
                     file: file_name,
                     uuid,
                 });

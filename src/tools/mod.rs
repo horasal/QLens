@@ -46,13 +46,13 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub fn create_tool(&self, db: Arc<dyn BlobStorage>) -> Box<dyn Tool + Send + Sync> {
+    pub fn create_tool(&self, image: Arc<dyn BlobStorage>, asset: Arc<dyn BlobStorage>) -> Box<dyn Tool + Send + Sync> {
         match self {
-            ToolKind::ZoomIn => Box::new(ZoomInTool::new(db)),
-            ToolKind::ImageMemo => Box::new(ImageMemoTool::new(db)),
-            ToolKind::DrawBbox => Box::new(BboxDrawTool::new(db)),
-            ToolKind::JsInterpreter => Box::new(JsInterpreter::new(db)),
-            ToolKind::Curl => Box::new(FetchTool::new(db)),
+            ToolKind::ZoomIn => Box::new(ZoomInTool::new(image)),
+            ToolKind::ImageMemo => Box::new(ImageMemoTool::new(image)),
+            ToolKind::DrawBbox => Box::new(BboxDrawTool::new(image)),
+            ToolKind::JsInterpreter => Box::new(JsInterpreter::new(image, asset)),
+            ToolKind::Curl => Box::new(FetchTool::new(image, asset)),
         }
     }
 
@@ -223,6 +223,8 @@ pub const FN_NAME: &str = "✿FUNCTION✿";
 pub const FN_ARGS: &str = "✿ARGS✿";
 pub const FN_RESULT: &str = "✿RESULT✿";
 pub const FN_EXIT: &str = "✿RETURN✿";
+pub const FN_RAWHTML: &str = "✿RAWHTML✿";
+pub const FN_RAWSVG: &str = "✿RAWSVG✿";
 pub const FN_STOP_WORDS: [&str; 4] = [FN_NAME, FN_ARGS, FN_RESULT, FN_EXIT];
 
 #[test]
@@ -235,8 +237,8 @@ fn test_builder() {
     let tree = Arc::new(db.open_tree("image").unwrap());
     let zoom_tool = Box::new(ZoomInTool::new(tree.clone()));
     let bbox_tool = Box::new(BboxDrawTool::new(tree.clone()));
-    let js_tool = Box::new(JsInterpreter::new(tree.clone()));
-    let curl_tool = Box::new(FetchTool::new(tree.clone()));
+    let js_tool = Box::new(JsInterpreter::new(tree.clone() ,tree.clone()));
+    let curl_tool = Box::new(FetchTool::new(tree.clone(), tree.clone()));
     let mem_tool = Box::new(ImageMemoTool::new(tree.clone()));
     let toolset = ToolSet::builder()
         .add_tool(zoom_tool)

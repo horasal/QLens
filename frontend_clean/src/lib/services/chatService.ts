@@ -18,11 +18,11 @@ import type {
 	StreamPacket,
 	UploadImageResponse,
 	PreviewFile,
-	ToolDescription
+	ToolDescription,
+  PendingFile
 } from '../types';
 import { settings } from '$lib/stores/settingsStore';
 import { currentUsage } from '../stores/chatStore';
-import { randomUUID } from 'crypto';
 
 // --- 局部状态 (不需要 UI 响应的) ---
 let ws: WebSocket | null = null;
@@ -41,7 +41,7 @@ export async function regenerateMessage(messageId: string) {
 	const curr = get(currentChat);
 	if (!curr || !ws) return;
 
-	const requestId = self.crypto.randomUUID();
+	const requestId = crypto.randomUUID();
 	processingChatIds.add(curr.id);
 	activeRequestIds.set(curr.id, requestId);
 	currentChat.update((chat) => {
@@ -212,9 +212,9 @@ function handleWsMessage(event: MessageEvent) {
 	}
 
 	if (packet.Usage) {
-      currentUsage.set(packet.Usage);
-      return;
-  }
+		currentUsage.set(packet.Usage);
+		return;
+	}
 
 	// 1. 处理流结束信号
 	if (packet.StreamEnd) {
@@ -373,36 +373,68 @@ export async function abortGeneration(chatId: string) {
 	toasts.show('Generation stopped', 'info');
 }
 
-export async function sendMessage(text: string, files: PreviewFile[]) {
+async function uploadAsset(file: File): Promise<string> {
+	const formData = new FormData();
+	formData.append('files', file);
+
+	const res = await fetch('/api/asset', { method: 'POST', body: formData });
+	if (!res.ok) throw new Error('Asset upload failed');
+
+	const data = await res.json();
+	return data[0].uuid;
+}
+
+async function uploadImage(file: File): Promise<string> {
+	const formData = new FormData();
+	formData.append('files', file);
+	const res = await fetch('/api/image', { method: 'POST', body: formData });
+	if (!res.ok) throw new Error('Image upload failed');
+	const data = await res.json();
+	return data[0].uuid;
+}
+
+export async function sendMessage(text: string, pendingFiles: PendingFile[]) {
 	const curr = get(currentChat) || (await startNewChat().then(() => get(currentChat)));
 	if (!curr) return;
-  currentUsage.set(null);
+	currentUsage.set(null);
 
 	processingChatIds.add(curr.id);
 	const requestId = self.crypto.randomUUID();
 	activeRequestIds.set(curr.id, requestId);
 
 	try {
-		let imageRefs: MessageContent[] = [];
-		if (files.length > 0) {
-			const formData = new FormData();
-			files.forEach((f) => formData.append('files', f.file, f.file.name));
-
-			const res = await fetch('/api/image', { method: 'POST', body: formData });
-			if (!res.ok) throw new Error('Image upload failed');
-
-			const uploaded: UploadImageResponse[] = await res.json();
-			imageRefs = uploaded.map((r) => ({ ImageRef: [r.uuid, r.file] }));
+		const messageContents: MessageContent[] = [];
+		if (text.trim()) {
+			messageContents.push({ Text: text.trim() });
 		}
 
-		const textContent: MessageContent[] = text.trim() ? [{ Text: text.trim() }] : [];
-		const fullContent = [...imageRefs, ...textContent];
+		const filePromises = pendingFiles.map(async (pf) => {
+			if (pf.type === 'image') {
+				const uuid = await uploadImage(pf.file);
+				return { ImageRef: [uuid, pf.file.name] } as MessageContent;
+			} else if (pf.type === 'asset') {
+				const uuid = await uploadAsset(pf.file);
+				return { AssetRef: [uuid, pf.file.name] } as MessageContent;
+			} else if (pf.type === 'text_content') {
+				// 小文本直接包装
+				return {
+					Text: `\n\`\`\`${pf.file.name.split('.').pop()}\n// File: ${pf.file.name}\n${pf.content}\n\`\`\`\n`
+				} as MessageContent;
+			}
+			return null;
+		});
+
+		const fileResults = await Promise.all(filePromises);
+
+		fileResults.forEach((r: MessageContent | null) => {
+			if (r) messageContents.push(r);
+		});
 
 		const userMsg: Message = {
-  		id: crypto.randomUUID(),
-      owner: { role: 'user' },
+			id: crypto.randomUUID(),
+			owner: { role: 'user' },
 			reasoning: [],
-			content: fullContent,
+			content: messageContents,
 			tool_use: []
 		};
 
@@ -418,11 +450,12 @@ export async function sendMessage(text: string, files: PreviewFile[]) {
 			payload: {
 				request_id: requestId,
 				chat_id: curr.id,
-				content: fullContent,
+				content: messageContents, // 发送完整的 MessageContent 数组
 				config: settings.getLLMConfig()
 			}
 		};
 		ws?.send(JSON.stringify(payload));
+
 	} catch (e: any) {
 		toasts.show(e.message);
 		processingChatIds.delete(curr.id);
@@ -448,8 +481,8 @@ function applyPacketToMessages(messages: Message[], packet: StreamPacket): Messa
 			return last;
 		}
 		const newMsg: Message = {
-  		id: crypto.randomUUID(),
-      owner: { role: 'assistant' } ,
+			id: crypto.randomUUID(),
+			owner: { role: 'assistant' },
 			reasoning: [],
 			content: [],
 			tool_use: [],
@@ -468,7 +501,7 @@ function applyPacketToMessages(messages: Message[], packet: StreamPacket): Messa
 		msg.tool_use.push(packet.ToolCall);
 		msg.tool_deltas = ''; // Reset deltas after a full call is parsed
 	} else if (packet.ToolResult) {
-			messages.push(packet.ToolResult.result);
+		messages.push(packet.ToolResult.result);
 	} else if (packet.ContentDelta) {
 		appendTextDelta(getOrCreateWipAssistant().content, packet.ContentDelta);
 	}
@@ -477,27 +510,27 @@ function applyPacketToMessages(messages: Message[], packet: StreamPacket): Messa
 }
 
 export async function getTools(): Promise<ToolDescription[]> {
-    try {
-        const res = await fetch('/api/tools');
-        if (!res.ok) throw new Error('Failed to fetch tools');
-        return await res.json();
-    } catch (e) {
-        console.error(e);
-        return [];
-    }
+	try {
+		const res = await fetch('/api/tools');
+		if (!res.ok) throw new Error('Failed to fetch tools');
+		return await res.json();
+	} catch (e) {
+		console.error(e);
+		return [];
+	}
 }
 
 export async function runTool(name: string, args: string): Promise<Message | null> {
-    try {
-        const res = await fetch(`/api/tools/${name}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ args })
-        });
-        if (!res.ok) throw new Error(`Tool execution failed: ${res.statusText}`);
-        return await res.json();
-    } catch (e: any) {
-        toasts.show(e.message, 'error');
-        return null;
-    }
+	try {
+		const res = await fetch(`/api/tools/${name}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ args })
+		});
+		if (!res.ok) throw new Error(`Tool execution failed: ${res.statusText}`);
+		return await res.json();
+	} catch (e: any) {
+		toasts.show(e.message, 'error');
+		return null;
+	}
 }

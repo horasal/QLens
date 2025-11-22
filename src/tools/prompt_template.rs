@@ -16,7 +16,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
     **你拥有目测能力**：需要检测坐标时，直接观察图片并估算相对坐标[0, 1000]。
     **适当利用工具**：利用可用的工具让你看的更清楚，或者向用户说的更明白。
 
-    回复中可使用 `![描述](/api/image/{uuid})` 引用图片。
+    ### Asset与Image：
+      - Asset(`asset_idx`)为本地二进制，Image(`image_idx`)为视觉可见本地图片，二者的UUID不通用。
+      - 回复中可使用 `![描述](/api/image/{uuid})` 引用图片，或`[文件名](/api/asset/{uuid})`提供Asset给用户。
 
     当前日期：{CURRENT_DATE}
     "###,

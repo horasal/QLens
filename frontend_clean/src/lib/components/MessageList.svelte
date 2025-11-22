@@ -334,16 +334,48 @@
 												on:imageClick={(e) => onImageClick(e.detail)}
 											/>
 										</div>
-									{:else}
-										<img
-											src={getImageUrl(item)}
-											alt="User upload"
-											class="my-2 h-auto w-64 cursor-pointer rounded-lg border-2 border-white/20 object-cover"
-											on:click={() => {
-												const url = getImageUrl(item);
-												if (url) onImageClick(url);
-											}}
-										/>
+									{:else if 'ImageRef' in item || 'ImageBin' in item}
+										<div
+											class="relative h-24 w-24 overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-sm transition-transform hover:scale-105"
+										>
+											<img
+												src={getImageUrl(item)}
+												alt="User Upload"
+												class="h-full w-full cursor-zoom-in object-cover"
+												on:click={() => {
+													const url = getImageUrl(item);
+													if (url) onImageClick(url);
+												}}
+											/>
+										</div>
+									{:else if 'AssetRef' in item}
+										{@const [uuid, desc] = item.AssetRef}
+										<a
+										    href={`/api/asset/${uuid}`}
+											target="_blank"
+											download={desc || `${uuid}` || "download"}
+											class="flex h-24 w-24 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border border-base-300 bg-base-200 p-2 shadow-sm transition-colors hover:bg-base-300"
+											title={desc}
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 24 24"
+												fill="currentColor"
+												class="h-8 w-8 text-base-content/50"
+											>
+												<path
+													fill-rule="evenodd"
+													d="M5.625 1.5H9a.375.375 0 01.375.375v1.875c0 1.036.84 1.875 1.875 1.875H12.975c.966 0 1.755-.79 1.755-1.755V2.325c0-.427.453-.669.784-.42 2.633 1.977 3.732 3.58 3.732 8.095v9.75c0 2.071-1.679 3.75-3.75 3.75H9.75a3.75 3.75 0 01-3.75-3.75V2.25c0-.414.336-.75.75-.75zm6.75 8.25a.75.75 0 00-1.5 0v2.904l-.22-.22a.75.75 0 00-1.06 1.06l1.5 1.5a.75.75 0 001.06 0l1.5-1.5a.75.75 0 00-1.06-1.06l-.22.22V9.75z"
+													clip-rule="evenodd"
+												/>
+											</svg>
+											<span
+												class="w-full truncate text-center text-[10px] leading-tight font-medium opacity-80"
+											>
+												{desc || 'File'}
+											</span>
+											<span class="badge scale-75 badge-xs font-mono badge-neutral">ASSET</span>
+										</a>
 									{/if}
 								{/each}
 							{/if}
@@ -380,7 +412,7 @@
 									.join('')}
 								<details
 									class="group/think bg-base-50 collapse-arrow collapse rounded-lg border border-base-200"
-									open={message.content.length === 0 && message.tool_use.length === 0}
+									open
 								>
 									<summary
 										class="collapse-title min-h-0 py-2 text-xs font-medium text-base-content/60 transition-colors hover:text-primary"

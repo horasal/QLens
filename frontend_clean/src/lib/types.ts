@@ -22,7 +22,8 @@ export type ToolDescription = {
 export type MessageContent =
     | { Text: string }
     | { ImageRef: [string, string] } // [uuid, description]
-    | { ImageBin: [string, string, string] }; // [base64, uuid, description]
+    | { ImageBin: [string, string, string] } // [base64, uuid, description]
+    | { AssetRef: [string, string] }; // [uuid, description]
 
 export type ToolUse = {
     use_id: string;
@@ -95,3 +96,8 @@ export type PreviewFile = {
     url: string;
     file: File;
 };
+
+export type PendingFile =
+    | { type: 'image'; file: File; url: string; id: string } // 图片：需预览 + 上传
+    | { type: 'text_content'; file: File; content: string; id: string } // 小文本：直接作为 Text 发送
+    | { type: 'asset'; file: File; id: string }; // 大文件/其他：需上传作为 AssetRef

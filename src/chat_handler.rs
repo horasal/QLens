@@ -157,7 +157,8 @@ where
 {
     client: Arc<Client<T>>,
     history: sled::Tree,
-    pub image: sled::Tree,
+    image: sled::Tree,
+    asset: sled::Tree,
     toolset: Arc<ToolSet>,
 }
 
@@ -167,6 +168,7 @@ impl<T: Config> Clone for LLMProvider<T> {
             client: self.client.clone(),
             history: self.history.clone(),
             image: self.image.clone(),
+            asset: self.asset.clone(),
             toolset: self.toolset.clone(),
         }
     }
@@ -181,11 +183,13 @@ impl<T: Config> LLMProvider<T> {
             .open()?;
         let image_db = db.open_tree("image")?;
         let history_db = db.open_tree("history")?;
+        let asset_db = db.open_tree("asset")?;
         tracing::info!("DB started.");
-        let blob = Arc::new(image_db.clone());
+        let image = Arc::new(image_db.clone());
+        let asset = Arc::new(asset_db.clone());
         let toolset = active_tools
             .iter()
-            .map(|kind| kind.create_tool(blob.clone()))
+            .map(|kind| kind.create_tool(image.clone(), asset.clone()))
             .fold(ToolSet::builder(), |ts, t| ts.add_tool(t))
             .build();
         tracing::info!("Active tools: {}", toolset);
@@ -193,6 +197,7 @@ impl<T: Config> LLMProvider<T> {
             client: Arc::new(client),
             history: history_db,
             image: image_db,
+            asset: asset_db,
             toolset: Arc::new(toolset),
         })
     }
@@ -232,14 +237,26 @@ impl<T: Config> LLMProvider<T> {
         }
     }
 
-    pub fn delete_entry_with_picture(&self, msg: &Message) {
+    pub fn get_asset(&self, asset_id: Uuid) -> Result<Option<Vec<u8>>, Error> {
+        match self.image.get(asset_id)? {
+            Some(ivec) => Ok(Some(ivec.to_vec())),
+            None => Ok(None),
+        }
+    }
+
+    pub fn delete_entry_with_blobs(&self, msg: &Message) {
         for content in msg.content.iter() {
-            if let MessageContent::ImageBin(_, img_id, _) | MessageContent::ImageRef(img_id, _) =
-                content
-            {
+            match content {
+                MessageContent::ImageBin(_, img_id, _) | MessageContent::ImageRef(img_id, _) =>
                 if let Err(e) = self.image.remove(img_id) {
                     tracing::error!("Failed to cleanup image {}: {}", img_id, e);
+                },
+                MessageContent::AssetRef(asset_id, _) => {
+                    if let Err(e) = self.asset.remove(asset_id) {
+                        tracing::error!("Failed to cleanup asset {}: {}", asset_id, e);
+                    }
                 }
+                _ => {},
             }
         }
     }
@@ -248,7 +265,7 @@ impl<T: Config> LLMProvider<T> {
         if let Some(ivec) = self.history.remove(chat_id)? {
             if let Ok(entry) = serde_json::from_slice::<ChatEntry>(&ivec) {
                 for msg in entry.messages {
-                    self.delete_entry_with_picture(&msg);
+                    self.delete_entry_with_blobs(&msg);
                 }
             }
         }
@@ -256,17 +273,11 @@ impl<T: Config> LLMProvider<T> {
     }
 
     pub fn save_image(&self, binary: &[u8]) -> Result<Uuid, Error> {
-        for _ in 0..20 {
-            let uuid = Uuid::new_v4();
-            if self
-                .image
-                .compare_and_swap(uuid, None::<&[u8]>, Some(binary))?
-                .is_ok()
-            {
-                return Ok(uuid);
-            }
-        }
-        Err(anyhow!("Unable to generate unique id in 20 tries."))
+        safe_save_to_db(&self.image, binary)
+    }
+
+    pub fn save_asset(&self, binary: &[u8]) -> Result<Uuid, Error> {
+        safe_save_to_db(&self.asset, binary)
     }
 
     pub fn new_chat(&self) -> Result<ChatEntry, Error> {
@@ -321,7 +332,7 @@ impl<T: Config> LLMProvider<T> {
         if let Some(index) = entry.messages.iter().position(|m| m.id == target_id) {
             if entry.messages[index].owner == Role::User {
                 for msg in entry.messages.iter().skip(index + 1) {
-                    self.delete_entry_with_picture(msg);
+                    self.delete_entry_with_blobs(msg);
                 }
                 entry.messages.truncate(index + 1);
 
@@ -616,10 +627,8 @@ impl<T: Config> LLMProvider<T> {
                 index
             };
 
-            // 2. 清理“界限之后”的所有图片资源
-            // 这样就绝对不会误删 User 自己的图片了
             for msg in entry.messages.iter().skip(keep_count) {
-                self.delete_entry_with_picture(msg);
+                self.delete_entry_with_blobs(msg);
             }
             entry.messages.truncate(keep_count);
 
@@ -811,6 +820,12 @@ impl<T: Config> LLMProvider<T> {
                         ChatCompletionRequestMessageContentPartText { text },
                     ));
                 }
+                MessageContent::AssetRef(_, _) => {
+                    // Asset返回描述文字
+                    res.push(ChatCompletionRequestToolMessageContentPart::Text(
+                        ChatCompletionRequestMessageContentPartText { text: msg.to_string() },
+                    ));
+                }
                 MessageContent::ImageRef(id, _) => {
                     // 添加文本描述 (LLM可以读取这个UUID和标签)
                     res.push(ChatCompletionRequestToolMessageContentPart::Text(
@@ -882,6 +897,13 @@ impl<T: Config> LLMProvider<T> {
         for msg in v.content {
             match msg {
                 MessageContent::Text(_) => {
+                    res.push(ChatCompletionRequestUserMessageContentPart::Text(
+                        types::ChatCompletionRequestMessageContentPartText {
+                            text: msg.to_string(),
+                        },
+                    ))
+                }
+                MessageContent::AssetRef(_, _) => {
                     res.push(ChatCompletionRequestUserMessageContentPart::Text(
                         types::ChatCompletionRequestMessageContentPartText {
                             text: msg.to_string(),
@@ -966,7 +988,10 @@ fn append_message_to_buffer(
             .map(|v| match v {
                 MessageContent::Text(s) => s.clone(),
                 MessageContent::ImageBin(_, _, _) | MessageContent::ImageRef(_, _) => {
-                    format!("[IMG]",)
+                    format!("[IMG]")
+                }
+                MessageContent::AssetRef(_, _) => {
+                    format!("[BIN]")
                 }
             })
             .collect::<String>()
@@ -976,4 +1001,17 @@ fn append_message_to_buffer(
     }
     vec.messages.push(content.clone());
     serde_json::to_vec(&vec).map_err(|e| e.into())
+}
+
+
+fn safe_save_to_db(db: &sled::Tree, binary: &[u8]) -> Result<Uuid, Error>{
+    for _ in 0..20 {
+        let uuid = Uuid::new_v4();
+        if db.compare_and_swap(uuid, None::<&[u8]>, Some(binary))?
+            .is_ok()
+        {
+            return Ok(uuid);
+        }
+    }
+    Err(anyhow!("Unable to generate unique id in 20 tries."))
 }

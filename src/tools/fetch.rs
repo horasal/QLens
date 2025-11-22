@@ -13,6 +13,8 @@ use crate::blob::BlobStorage;
 use crate::convert_svg_to_png;
 use crate::parse_tool_args;
 
+const MAX_TEXT_LEN: usize = 10 * 1024;
+
 #[derive(Deserialize, JsonSchema)]
 struct FetchArgs {
     #[schemars(description = "The target URL to fetch content from.")]
@@ -46,13 +48,15 @@ enum FetchMethod {
 }
 
 pub struct FetchTool {
-    db: Arc<dyn BlobStorage>,
+    image : Arc<dyn BlobStorage>,
+    asset: Arc<dyn BlobStorage>,
     client: reqwest::Client,
 }
 
 impl FetchTool {
-    pub fn new(ctx: Arc<dyn BlobStorage>) -> Self {
-        Self { db: ctx,
+    pub fn new(image: Arc<dyn BlobStorage>, asset: Arc<dyn BlobStorage>) -> Self {
+        Self { image: image,
+            asset: asset,
             client: reqwest::Client::builder()
                 .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .connect_timeout(Duration::from_secs(30))
@@ -74,9 +78,10 @@ impl Tool for FetchTool {
             name_for_model: "curl_url".to_string(),
             name_for_human: "网页抓取工具(curl_url)".to_string(),
             description_for_model:
-"Access and retrieve remote content from a specific URL and save to local database.
-* Allow to fetch image binary and any text-base contents.
-* If remote content is an image, this tool downloads the image into local database and returns it with a local uuid; the image format may be converted for rendering purpose.
+"Access and retrieve **remote** content from a specific URL(e.g. http(s)://).
+* Allow to fetch binary and any text-base contents.
+* If remote content is a blob, this tool downloads it into local database returns a local uuid.
+* If the above blob is an image, you will see the image and the image format may be converted for rendering.
 * If remote content is HTML, it will be automatically converted to Markdown and all links are preserved as remote urls.
 * Other text-based content will be returned as-is.".to_string(),
             parameters: serde_json::to_value(schema_for!(FetchArgs)).unwrap(),
@@ -152,10 +157,10 @@ impl Tool for FetchTool {
 
             (mime::IMAGE, sub_type) => {
                 let uuid = if sub_type.as_str().to_lowercase().contains("svg") {
-                    self.db.save(&convert_svg_to_png(&res.text().await?)?)?
+                    self.image.save(&convert_svg_to_png(&res.text().await?)?)?
                 } else {
                     let bytes = res.bytes().await?.to_vec();
-                    self.db.save(&super::convert_to_png(bytes)?)?
+                    self.image.save(&super::convert_to_png(bytes)?)?
                 };
                 Ok(vec![MessageContent::ImageRef(
                     uuid,
@@ -169,13 +174,15 @@ impl Tool for FetchTool {
                         return Ok(vec![MessageContent::Text(res.text().await?)]);
                     }
                 }
+                let bytes = res.bytes().await?.to_vec();
 
-                match res.text().await {
-                    Ok(text) => Ok(vec![MessageContent::Text(text)]),
-                    Err(_) => Ok(vec![MessageContent::Text(format!(
-                        "Unsupported Binary Content-Type: {}",
-                        mime_type
-                    ))]),
+                match String::from_utf8(bytes.clone()) {
+                    Ok(text) if text.len() < MAX_TEXT_LEN => Ok(vec![MessageContent::Text(text)]),
+                    _ => {
+                        let uuid = self.asset.save(&bytes)?;
+                        tracing::info!("Blob fetched and saved as asset {}", uuid);
+                        Ok(vec![MessageContent::AssetRef(uuid, mime_type.to_string())])
+                    }
                 }
             }
         }

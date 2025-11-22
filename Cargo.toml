@@ -38,6 +38,8 @@ strum = { version = "0.27.2", features = ["derive"] }
 serde_yaml = "0.9.34"
 tokio-util = "0.7.17"
 async-trait = "0.1.89"
+qrcode = "0.14.1"
+rqrr = "0.10.0"
 
 [profile.release]
 strip = true
