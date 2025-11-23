@@ -1,5 +1,5 @@
 use crate::blob::{BlobStorage, BlobStorageError};
-use crate::{FN_RAWHTML, FN_RAWSVG, parse_sourcecode_args};
+use crate::{FN_RAWHTML, FN_RAWSVG, get_usvg_options, parse_sourcecode_args};
 use crate::{MessageContent, Tool, ToolDescription, tools::FONT_DATA};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -36,8 +36,8 @@ impl Tool for JsInterpreter {
         let cheatsheet = generate_cheatsheet_prompt();
         let description = format!(
             r##"V8 sandbox environments.
-        **Libs:** {libs}
-        **API:**
+        **Imported Libs:** {libs}
+        **JS API:**
         - `save_svg(str):uuid` / `save_blob('asset'|'image', bytes):uuid`
         - `load_blob('asset'|'image', uuid):bytes`
         - `convert_to_png(bytes):bytes`
@@ -148,26 +148,7 @@ const MAX_BLOB_PUT_TRIES: usize = 20;
 #[op2]
 #[string]
 fn op_save_svg(state: &mut OpState, #[string] svg_data: &str) -> Result<String, ImageError> {
-    let mut font_db = usvg::fontdb::Database::new();
-    font_db.load_font_data(FONT_DATA.to_vec());
-    let family = font_db
-        .faces()
-        .next()
-        .and_then(|x| x.families.first())
-        .map(|x| x.0.to_string())
-        .unwrap_or("MapleMono-NF-CN-Regular".to_string());
-
-    font_db.set_sans_serif_family(&family);
-    font_db.set_serif_family(&family);
-    font_db.set_monospace_family(&family);
-    font_db.set_cursive_family(&family);
-    font_db.set_fantasy_family(&family);
-    let usvg_options = usvg::Options {
-        fontdb: Arc::new(font_db),
-        font_family: family,
-        ..Default::default()
-    };
-
+    let usvg_options = get_usvg_options();
     let tree = usvg::Tree::from_str(svg_data, &usvg_options)?;
 
     let svg_size = tree.size();
@@ -510,6 +491,14 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         after_hook: None,
     },
     LibraryConfig {
+        require_name: "simplify",
+        global_var: "simplify",
+        src: include_str!("prelude/simplify.min.js"),
+        category: LibCategory::DataProcessing,
+        prompt_hint: "",
+        after_hook: None,
+    },
+    LibraryConfig {
         require_name: "dayjs",
         global_var: "dayjs",
         src: include_str!("prelude/dayjs.min.js"),
@@ -530,9 +519,9 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         global_var: "aq",
         src: include_str!("prelude/arquero.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: r##"const dt=aq.table({a:[1,2,3],b:[4,5,6]});
+        prompt_hint: r##"const dt=aq.fromCSV(new TextDecoder().decode(bytes));
 console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
-        after_hook: None,
+        after_hook: Some(r#"if (typeof aq !== "undefined") { aq.aq = aq; }"#)
     },
     LibraryConfig {
         require_name: "mustache",
@@ -556,8 +545,8 @@ console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
         global_var: "d3",
         src: include_str!("prelude/d3.v7.min.js"),
         category: LibCategory::Visualization,
-        prompt_hint: "const svg=d3.create('svg').attr('width',400).attr('height',300);/*draw*/; save_svg(svg.node().outerHTML)",
-        after_hook: None,
+        prompt_hint: "const s=d3.create('svg').attr('width',400).attr('height',300)/*NO append*/;s.append/*draw*/; save_svg(svg.node().outerHTML)",
+        after_hook: Some(r#"if (typeof d3 !== "undefined") d3.d3 = d3;"#),
     },
     LibraryConfig {
         require_name: "vega",
@@ -566,7 +555,7 @@ console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
         category: LibCategory::Visualization,
         prompt_hint: r##"/*Spec must have width/height*/ const vegaSpec=vegaLite.compile(vlSpec).spec;
 const v=new vega.View(vega.parse(vegaSpec),{renderer:'svg'}).initialize(); save_svg(await v.toSVG());"##,
-        after_hook: None,
+        after_hook: Some(r#"if (typeof vega !== "undefined") vega.vega = vega;"#),
     },
     LibraryConfig {
         require_name: "vega-lite",

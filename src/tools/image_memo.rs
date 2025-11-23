@@ -1,302 +1,414 @@
+use std::{str::FromStr, sync::Arc};
+
 use anyhow::anyhow;
-use image::{self, Rgba, RgbaImage};
-use resvg::tiny_skia;
-use resvg::usvg;
-use schemars::JsonSchema;
-use schemars::schema_for;
-use serde::Deserialize;
-use std::cmp::max;
-use std::str::FromStr;
-use std::sync::Arc;
+use resvg::{tiny_skia, usvg};
+use schemars::{JsonSchema, schema_for};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::blob::BlobStorage;
-use crate::parse_tool_args;
-use crate::tools::FONT_DATA;
-use crate::{MessageContent, Tool, ToolDescription};
+use crate::{
+    MessageContent, Tool, ToolDescription, blob::BlobStorage, get_usvg_options, parse_tool_args,
+};
 
-const MEMO_KEY: &str = "current_session_memo_uuid";
-const DEFAULT_WIDTH: u32 = 1024;
-const DEFAULT_HEIGHT: u32 = 1024;
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoState {
+    // 画布基础尺寸 (可以动态增长)
+    pub width: u32,
+    pub height: u32,
+    // 自动布局的游标位置 (y坐标)
+    pub cursor_y: u32,
+    // 图层列表 (从底向上渲染)
+    pub layers: Vec<Layer>,
+}
 
-#[derive(Deserialize, JsonSchema)]
-struct ImageMemoWriteArgs {
-    content: WriteContent,
-    #[schemars(description = "Optional label for this operation.")]
-    label: Option<String>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: Uuid,
+    pub kind: LayerKind,
+    // 图层在画布上的位置和尺寸
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LayerKind {
+    ImageRef(Uuid),
+    SvgContent(String),
 }
 
 #[derive(Deserialize, JsonSchema)]
-enum WriteContent {
-    #[schemars(description = "Draw SVG content onto the memo.")]
-    SVG(SvgMemo),
-    #[schemars(description = "Copy a region from another image (local UUID) onto the memo.")]
-    CopyImage(ImageMemoCopy),
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct SvgMemo {
-    #[schemars(description = "SVG string content.")]
-    svg: String,
-    #[schemars(
-        description = "Target bounding box [x1, y1, x2, y2] on the memo. The SVG will be resized to fit this box."
-    )]
-    target_bbox: [f64; 4],
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct ImageMemoCopy {
-    #[schemars(description = "The local UUID of the source image.")]
-    img_idx: String,
-    #[schemars(description = "Source region [x1, y1, x2, y2] to copy from.")]
-    source_bbox: [f64; 4],
-    #[schemars(description = "Target region [x1, y1, x2, y2] on the memo to paste to.")]
-    target_bbox: [f64; 4],
-}
-
-#[derive(Deserialize, JsonSchema)]
-enum ImageMemoArgs {
-    #[schemars(description = "Read the current memo.")]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum ImageMemoArgs {
     Read {
-        #[schemars(
-            description = "Optional bounding box [x1, y1, x2, y2] to read. If omitted, reads full memo."
-        )]
-        bbox: Option<[f64; 4]>,
+        #[serde(default = "default_true")]
+        grid: bool,
     },
-    #[schemars(description = "Write content (SVG or Image) to the memo.")]
-    Write(ImageMemoWriteArgs),
-    #[schemars(description = "Clear the memo (reset to blank).")]
+    Add {
+        content: MemoContentInput,
+        layout: LayoutMode,
+    },
+    Undo,
     Clear,
 }
 
-pub struct ImageMemoTool {
-    db: Arc<dyn BlobStorage>,
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoContentInput {
+    #[schemars(description = "Image UUID.")]
+    Image(String),
+    #[schemars(description = "SVG string.")]
+    Svg(String),
+    #[schemars(description = "Raw text (auto-wrap).")]
+    Text(String),
 }
 
-impl ImageMemoTool {
-    pub fn new(ctx: Arc<dyn BlobStorage>) -> Self {
-        Self { db: ctx }
-    }
+#[derive(Deserialize, JsonSchema)]
+pub enum LayoutMode {
+    #[schemars(description = "Auto-stack at bottom.")]
+    Append { height: Option<u32> },
 
-    fn get_current_memo(&self) -> Result<RgbaImage, anyhow::Error> {
-        if let Some(uuid_bytes) = self.db.get_by_key(MEMO_KEY.as_bytes())? {
-            let uuid = Uuid::from_slice(&uuid_bytes)?;
-            if let Some(img_data) = self.db.get(uuid)? {
-                let img = image::load_from_memory(&img_data)?.to_rgba8();
-                return Ok(img);
-            }
-        }
-        Ok(RgbaImage::from_pixel(
-            DEFAULT_WIDTH,
-            DEFAULT_HEIGHT,
-            Rgba([255, 255, 255, 255]),
-        ))
-    }
+    #[schemars(description = "[x1,y1,x2,y2] (Normalized 0-1000)")]
+    Absolute { bbox: [f64; 4] },
+}
 
-    fn save_memo(&self, img: &RgbaImage) -> Result<Uuid, anyhow::Error> {
-        let mut output_buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut output_buf);
-        img.write_to(&mut cursor, image::ImageFormat::Png)?;
+fn default_true() -> bool {
+    true
+}
 
-        let uuid = self.db.save(&output_buf)?;
-        self.db.insert(MEMO_KEY.as_bytes(), uuid.as_bytes())?;
-        Ok(uuid)
-    }
+pub struct ImageMemoTool {
+    image_db: Arc<dyn BlobStorage>,
+    memo_db: Arc<dyn BlobStorage>,
 }
 
 #[async_trait::async_trait]
 impl Tool for ImageMemoTool {
     fn name(&self) -> String {
-        "image_memo".to_string()
+        "Memo".to_string()
     }
 
     fn description(&self) -> ToolDescription {
         ToolDescription {
-            name_for_model: "image_memo".to_string(),
-            name_for_human: "Visual Notebook (image_memo)".to_string(),
-            description_for_model: r##"A persistent visual notebook.
-Use this to:
-1. Organize thoughts by drawing diagrams (SVG).
-2. Collect evidence by clipping parts of images (CopyImage).
-3. Layout information visually for complex reasoning.
-The memo persists across tool calls in this session.
-IMPORTANT: Use coordinate format [x1, y1, x2, y2] for all bounding boxes.
-"##
-            .to_string(),
+            name_for_model: "Memo".to_string(),
+            name_for_human: "笔记工具".to_string(),
+            description_for_model: r##"Visual Scratchpad (Persistent).
+**Usage:**
+1. **Complex Reasoning**: Draw diagrams/relations.
+2. **Comparison**: Copy images side-by-side.
+3. **State**: Save intermediate results.
+**Note:** Context is persistent across turns."##.to_string(),
             parameters: serde_json::to_value(schema_for!(ImageMemoArgs)).unwrap(),
-            args_format: "必须是一个JSON对象".to_string(),
+            args_format: "JSON.".to_string(),
         }
     }
 
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
         let args: ImageMemoArgs = parse_tool_args(args)?;
+        let mut state = self.get_state()?;
 
         match args {
-            ImageMemoArgs::Read { bbox } => {
-                let mut memo = self.get_current_memo()?;
-                if let Some(rect) = bbox {
-                    let x = rect[0] as u32;
-                    let y = rect[1] as u32;
-                    let w = max(1, (rect[2] - rect[0]) as u32);
-                    let h = max(1, (rect[3] - rect[1]) as u32);
-
-                    let (mw, mh) = memo.dimensions();
-                    if x + w > mw || y + h > mh {
-                        return Ok(vec![MessageContent::Text(
-                            "Error: Read bbox out of bounds.".to_string(),
-                        )]);
+            ImageMemoArgs::Add { content, layout } => {
+                let (kind, src_w, src_h) = match content {
+                    MemoContentInput::Svg(s) => (LayerKind::SvgContent(s), 200, 200),
+                    MemoContentInput::Image(uuid_str) => {
+                        let uuid = Uuid::from_str(&uuid_str)?;
+                        let bytes = self.image_db.get(uuid)?.ok_or(anyhow!("Img not found"))?;
+                        let meta = image::load_from_memory(&bytes)?;
+                        (LayerKind::ImageRef(uuid), meta.width(), meta.height())
                     }
-                    let sub_img = image::imageops::crop(&mut memo, x, y, w, h).to_image();
-                    let temp_uuid = self.db.save(&image_to_bytes(&sub_img)?)?;
-                    return Ok(vec![MessageContent::ImageRef(
-                        temp_uuid,
-                        "Memo View (Cropped)".to_string(),
-                    )]);
-                }
-
-                // Read 全图时，依然保存一次 current memo 确保有最新的 uuid（虽然内容没变）
-                // 这个UUID跟Chat Session是关联的，chat被删除后就会自动消失，不需要担心空间问题
-                let uuid = self.save_memo(&memo)?;
-                Ok(vec![MessageContent::ImageRef(
-                    uuid,
-                    "Current Memo".to_string(),
-                )])
-            }
-            ImageMemoArgs::Clear => {
-                let empty = RgbaImage::from_pixel(
-                    DEFAULT_WIDTH,
-                    DEFAULT_HEIGHT,
-                    Rgba([255, 255, 255, 255]),
-                );
-                let uuid = self.save_memo(&empty)?;
-                Ok(vec![MessageContent::Text(format!(
-                    "Memo cleared. New UUID: {}",
-                    uuid
-                ))])
-            }
-            ImageMemoArgs::Write(write_args) => {
-                let mut memo = self.get_current_memo()?;
-
-                let (req_w, req_h) = match &write_args.content {
-                    WriteContent::SVG(s) => (s.target_bbox[2] as u32, s.target_bbox[3] as u32),
-                    WriteContent::CopyImage(c) => {
-                        (c.target_bbox[2] as u32, c.target_bbox[3] as u32)
+                    MemoContentInput::Text(txt) => {
+                        let (svg, h) = wrap_text_to_svg(&txt, state.width); // 宽度铺满画布
+                        (LayerKind::SvgContent(svg), state.width, h)
                     }
                 };
 
-                let (curr_w, curr_h) = memo.dimensions();
-                if req_w > curr_w || req_h > curr_h {
-                    let new_w = max(curr_w, req_w);
-                    let new_h = max(curr_h, req_h);
-                    let mut new_memo =
-                        RgbaImage::from_pixel(new_w, new_h, Rgba([255, 255, 255, 255]));
-                    image::imageops::overlay(&mut new_memo, &memo, 0, 0);
-                    memo = new_memo;
+                let (x, y, w, h) = match layout {
+                    LayoutMode::Append { height } => {
+                        let target_h = height.unwrap_or(src_h);
+
+                        let scale = target_h as f32 / src_h as f32;
+                        let final_w = (src_w as f32 * scale) as u32;
+
+                        let y = state.cursor_y;
+
+                        state.cursor_y += target_h + 20; // +20 padding
+
+                        (20, y as i32 + 20, final_w, target_h) // x=20 padding
+                    }
+                    LayoutMode::Absolute { bbox } => {
+                        let abs_box = to_abs_bbox(bbox, state.width, state.height);
+                        (abs_box[0] as i32, abs_box[1] as i32, abs_box[2] - abs_box[0], abs_box[3] - abs_box[1])
+                    }
+                };
+
+                let required_h = (y + h as i32) as u32 + 50;
+                if required_h > state.height {
+                    state.height = required_h;
                 }
 
-                match write_args.content {
-                    WriteContent::SVG(svg_args) => {
-                        let x1 = svg_args.target_bbox[0];
-                        let y1 = svg_args.target_bbox[1];
-                        let w = (svg_args.target_bbox[2] - x1) as u32;
-                        let h = (svg_args.target_bbox[3] - y1) as u32;
+                state.layers.push(Layer {
+                    id: Uuid::new_v4(),
+                    kind,
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                });
 
-                        let svg_img = render_svg_to_image(&svg_args.svg, w, h)?;
-                        image::imageops::overlay(&mut memo, &svg_img, x1 as i64, y1 as i64);
-                    }
-                    WriteContent::CopyImage(copy_args) => {
-                        let src_uuid = Uuid::from_str(&copy_args.img_idx)?;
-                        if let Some(src_data) = self.db.get(src_uuid)? {
-                            let mut src_img = image::load_from_memory(&src_data)?.to_rgba8();
+                self.save_state(&state)?;
 
-                            let sx = copy_args.source_bbox[0] as u32;
-                            let sy = copy_args.source_bbox[1] as u32;
-                            let sw = (copy_args.source_bbox[2] - copy_args.source_bbox[0]) as u32;
-                            let sh = (copy_args.source_bbox[3] - copy_args.source_bbox[1]) as u32;
+                Ok(vec![MessageContent::Text("Layer added.".into())])
+            }
 
-                            let dw = (copy_args.target_bbox[2] - copy_args.target_bbox[0]) as u32;
-                            let dh = (copy_args.target_bbox[3] - copy_args.target_bbox[1]) as u32;
+            ImageMemoArgs::Read { grid } => {
+                let png_data = self.render_view(&state, grid)?;
+                let uuid = self.image_db.save(&png_data)?;
+                Ok(vec![
+                    MessageContent::Text("✅ Read Success".to_string()),
+                    MessageContent::ImageRef(uuid, "Memo Snapshot".into())])
+            }
 
-                            let crop =
-                                image::imageops::crop(&mut src_img, sx, sy, sw, sh).to_image();
+            ImageMemoArgs::Undo => {
+                if let Some(l) = state.layers.pop() {
+                    state.cursor_y = state
+                        .layers
+                        .iter()
+                        .map(|l| l.y as u32 + l.height)
+                        .max()
+                        .unwrap_or(0)
+                        + 20;
 
-                            let resized = image::imageops::resize(
-                                &crop,
-                                dw,
-                                dh,
-                                image::imageops::FilterType::Lanczos3,
-                            );
-
-                            image::imageops::overlay(
-                                &mut memo,
-                                &resized,
-                                copy_args.target_bbox[0] as i64,
-                                copy_args.target_bbox[1] as i64,
-                            );
-                        } else {
-                            return Err(anyhow!("Source image not found"));
-                        }
-                    }
+                    self.save_state(&state)?;
+                    Ok(vec![MessageContent::Text("Undone last action.".into())])
+                } else {
+                    Ok(vec![MessageContent::Text("Nothing to undo.".into())])
                 }
+            }
 
-                let uuid = self.save_memo(&memo)?;
-                Ok(vec![MessageContent::ImageRef(
-                    uuid,
-                    write_args.label.unwrap_or("Memo Updated".to_string()),
-                )])
+            ImageMemoArgs::Clear => {
+                self.memo_db.remove(b"current")?;
+                Ok(vec![MessageContent::Text("Memo cleared.".into())])
             }
         }
     }
 }
 
-fn render_svg_to_image(
-    svg_data: &str,
-    target_w: u32,
-    target_h: u32,
-) -> Result<RgbaImage, anyhow::Error> {
-    let mut font_db = usvg::fontdb::Database::new();
-    font_db.load_font_data(FONT_DATA.to_vec());
+impl ImageMemoTool {
+    pub fn new(image_db: Arc<dyn BlobStorage>, memo_db: Arc<dyn BlobStorage>) -> Self {
+        Self {
+            image_db: image_db,
+            memo_db: memo_db,
+        }
+    }
 
-    let usvg_options = usvg::Options {
-        fontdb: Arc::new(font_db),
-        font_family: "MapleMono-NF-CN-Regular".into(),
-        ..Default::default()
-    };
+    fn get_state(&self) -> Result<MemoState, anyhow::Error> {
+        if let Some(data) = self.memo_db.get_by_key(b"current")? {
+            Ok(serde_json::from_slice(&data)?)
+        } else {
+            Ok(MemoState {
+                width: 1024,
+                height: 1024,
+                cursor_y: 0,
+                layers: vec![],
+            })
+        }
+    }
 
-    let tree = usvg::Tree::from_str(svg_data, &usvg_options)?;
+    fn save_state(&self, state: &MemoState) -> Result<(), anyhow::Error> {
+        let data = serde_json::to_vec(state)?;
+        self.memo_db.insert(b"current", &data)?;
+        Ok(())
+    }
 
-    let size = tree.size();
+    fn render_view(&self, state: &MemoState, show_grid: bool) -> Result<Vec<u8>, anyhow::Error> {
+        let header_height = 40;
+        let total_height = state.height + header_height;
+        let mut canvas = tiny_skia::Pixmap::new(state.width, total_height)
+            .ok_or(anyhow!("Failed to create canvas"))?;
+        canvas.fill(tiny_skia::Color::WHITE);
 
-    let fit_w = if size.width() > 0.0 {
-        size.width()
-    } else {
-        target_w as f32
-    };
-    let fit_h = if size.height() > 0.0 {
-        size.height()
-    } else {
-        target_h as f32
-    };
+        let content_transform = tiny_skia::Transform::from_translate(0.0, header_height as f32);
 
-    let scale_x = target_w as f32 / fit_w;
-    let scale_y = target_h as f32 / fit_h;
+        for layer in &state.layers {
+            let transform = content_transform.pre_translate(layer.x as f32, layer.y as f32);
 
-    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+            match &layer.kind {
+                LayerKind::SvgContent(svg_data) => {
+                    let usvg_options = get_usvg_options();
+                    let tree = usvg::Tree::from_str(svg_data, &usvg_options)?;
 
-    let mut pixmap =
-        tiny_skia::Pixmap::new(target_w, target_h).ok_or(anyhow!("Failed to create pixmap"))?;
+                    let size = tree.size();
+                    let scale_x = layer.width as f32 / size.width();
+                    let scale_y = layer.height as f32 / size.height();
+                    let scale = scale_x.min(scale_y);
 
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
+                    let render_ts = transform.post_scale(scale, scale);
+                    resvg::render(&tree, render_ts, &mut canvas.as_mut());
+                }
+                LayerKind::ImageRef(uuid) => {
+                    if let Some(img_bytes) = self.image_db.get(*uuid)? {
+                        let src_pixmap = tiny_skia::Pixmap::decode_png(&img_bytes)?;
 
-    let img = RgbaImage::from_raw(target_w, target_h, pixmap.data().to_vec())
-        .ok_or(anyhow!("Failed to convert pixmap to image"))?;
+                        let scale_x = layer.width as f32 / src_pixmap.width() as f32;
+                        let scale_y = layer.height as f32 / src_pixmap.height() as f32;
 
-    Ok(img)
+                        let render_ts = transform.post_scale(scale_x, scale_y);
+
+                        canvas.draw_pixmap(
+                            0,
+                            0,
+                            src_pixmap.as_ref(),
+                            &tiny_skia::PixmapPaint::default(),
+                            render_ts,
+                            None,
+                        );
+                    }
+                }
+            }
+        }
+        let mut header_paint = tiny_skia::Paint::default();
+        header_paint.set_color_rgba8(240, 240, 240, 255); // 浅灰色背景
+        canvas.fill_rect(
+            tiny_skia::Rect::from_xywh(0.0, 0.0, state.width as f32, header_height as f32).unwrap(),
+            &header_paint,
+            tiny_skia::Transform::default(),
+            None,
+        );
+
+        let header_svg = format!(
+            r###"<svg><text x="10" y="25" font-family="sans-serif" font-size="16" fill="#555" font-weight="bold">Visual Notebook (Session ID: {}) - Cursor Y: {}</text></svg>"###,
+            "Current", state.cursor_y
+        );
+        let tree = usvg::Tree::from_str(&header_svg, &get_usvg_options())?;
+        resvg::render(&tree, tiny_skia::Transform::default(), &mut canvas.as_mut());
+        if show_grid {
+            self.draw_grid(&mut canvas)?;
+        }
+
+        Ok(canvas.encode_png()?)
+    }
+
+    fn draw_grid(&self, canvas: &mut tiny_skia::Pixmap) -> Result<(), anyhow::Error> {
+        let width = canvas.width();
+        let height = canvas.height();
+        let step = 100; // 网格间距
+
+        let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg">"#);
+
+        svg.push_str(
+            r#"
+            <defs>
+                <style>
+                    .grid { stroke: #e0e0e0; stroke-width: 1; }
+                    .axis { stroke: #ff0000; stroke-width: 1; stroke-dasharray: 4; }
+                    .label { font-family: monospace; font-size: 10px; fill: #999; opacity: 0.7; }
+                </style>
+            </defs>
+        "#,
+        );
+
+        for x in (0..width).step_by(step) {
+            svg.push_str(&format!(
+                r#"<line x1="{}" y1="0" x2="{}" y2="{}" class="grid" />"#,
+                x, x, height
+            ));
+            svg.push_str(&format!(
+                r#"<text x="{}" y="12" class="label">{}</text>"#,
+                x + 2,
+                x
+            ));
+        }
+
+        for y in (0..height).step_by(step) {
+            svg.push_str(&format!(
+                r#"<line x1="0" y1="{}" x2="{}" y2="{}" class="grid" />"#,
+                y, width, y
+            ));
+            svg.push_str(&format!(
+                r#"<text x="2" y="{}" dy="-2" class="label">{}</text>"#,
+                y,
+                y
+            ));
+        }
+
+        svg.push_str("</svg>");
+
+        let tree = usvg::Tree::from_str(&svg, &get_usvg_options())?;
+        resvg::render(&tree, tiny_skia::Transform::default(), &mut canvas.as_mut());
+
+        Ok(())
+    }
 }
 
-fn image_to_bytes(img: &RgbaImage) -> Result<Vec<u8>, anyhow::Error> {
-    let mut buf = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut buf);
-    img.write_to(&mut cursor, image::ImageFormat::Png)?;
-    Ok(buf)
+fn wrap_text_to_svg(text: &str, width: u32) -> (String, u32) {
+    let line_height = 30;
+    let padding = 20;
+
+    // 如果需要完美排版，需要引入 text_layout 库，这里为了不引入新依赖做简易版
+    let max_chars_per_line = (width - padding * 2) / 12;
+
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let mut current_line = String::new();
+        let mut width_counter = 0;
+
+        for c in paragraph.chars() {
+            let char_width = if c.is_ascii() { 1 } else { 2 };
+            if width_counter + char_width > max_chars_per_line {
+                lines.push(current_line);
+                current_line = String::new();
+                width_counter = 0;
+            }
+            current_line.push(c);
+            width_counter += char_width;
+        }
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+    }
+
+    let height = (lines.len() as u32 * line_height) + padding * 2;
+
+    let mut svg_content =
+        String::from(r#"<g font-family="monospace" font-size="24" fill="black">"#);
+
+    for (i, line) in lines.iter().enumerate() {
+        let y = padding + (i as u32 + 1) * line_height - 5;
+        // 注意：需要对 line 进行 XML 转义 (replace < with &lt; 等)，此处简略
+        let safe_line = line
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;");
+        svg_content.push_str(&format!(
+            r#"<text x="{}" y="{}">{}</text>"#,
+            padding, y, safe_line
+        ));
+    }
+    svg_content.push_str("</g>");
+
+    let svg = format!(
+        r###"<svg width="{}" height="{}" viewBox="0 0 {} {}" xmlns="http://www.w3.org/2000/svg">
+            <rect width="100%" height="100%" fill="#f0f0f0" stroke="#ccc" stroke-width="1"/>
+            {}
+           </svg>"###,
+        width, height, width, height, svg_content
+    );
+
+    (svg, height)
+}
+
+pub fn normalize_to_pixel(rel_val: f64, max_pixel: u32) -> u32 {
+    let ratio = rel_val.clamp(0.0, 1000.0) / 1000.0;
+    (ratio * max_pixel as f64).round() as u32
+}
+
+/// 处理 Bbox [x1, y1, x2, y2] 的转换
+pub fn to_abs_bbox(rel_bbox: [f64; 4], w: u32, h: u32) -> [u32; 4] {
+    [
+        normalize_to_pixel(rel_bbox[0], w),
+        normalize_to_pixel(rel_bbox[1], h),
+        normalize_to_pixel(rel_bbox[2], w),
+        normalize_to_pixel(rel_bbox[3], h),
+    ]
 }

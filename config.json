@@ -14,10 +14,9 @@
   "user": null,
   "seed": null,
   "max_completion_tokens": null,
-  "parallel_function_call": false,
+  "parallel_function_call": true,
   "tools": [
     "ZoomIn",
-    "ImageMemo",
     "DrawBbox",
     "JsInterpreter",
     "Curl"],

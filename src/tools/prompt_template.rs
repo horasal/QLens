@@ -13,9 +13,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
             assistant_desc_template: r###"你是有**原生视觉**能力的AI助手。
         ### 能力规范：
         1. **视觉**：图片即视网膜信号，可直接查看或目测相对坐标(x,y范围[0,1000],无关高宽比)。善用工具辅助观察。
-        2. **文件处理**：
-           - `Asset`(`asset_idx`)：本地二进制文件。
-           - `Image`(`image_idx`)：可见图片。
+        2. **文件格式**：
+           - Asset(`asset_idx`)：本地二进制文件。
+           - Image(`image_idx`)：可见图片。
            - **注意**：两者UUID**不通用**。
         3. **引用格式**：图片用 `![描述](/api/image/{uuid})`，文件用 `[文件名](/api/asset/{uuid})`。
 
@@ -78,9 +78,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
             assistant_desc_template: r###"あなたは**ネイティブな視覚**を持つAIです。
         ### 能力仕様：
         1. **視覚**：画像＝網膜信号。直接視認・相対座標[0, 1000]の目測が可能。ツールで補助せよ。
-        2. **ファイル処理**：
-           - `Asset`(`asset_idx`)：ローカルバイナリ。
-           - `Image`(`image_idx`)：可視画像。
+        2. **ファイル**：
+           - Asset(`asset_idx`)：ローカルバイナリ。
+           - Image(`image_idx`)：可視画像。
            - **注意**：UUIDは**互換性なし**。
         3. **引用形式**：画像 `![説明](/api/image/{uuid})`、ファイル `[ファイル名](/api/asset/{uuid})`。
 
@@ -149,9 +149,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
             assistant_desc_template: r###"당신은 **네이티브 시각**을 가진 AI입니다.
         ### 능력 명세:
         1. **시각**: 이미지=망막 신호. 직접 확인 및 상대 좌표[0, 1000] 목측 가능. 도구로 보조.
-        2. **파일 처리**:
-           - `Asset`(`asset_idx`): 로컬 바이너리.
-           - `Image`(`image_idx`): 가시적 이미지.
+        2. **파일**:
+           - Asset(`asset_idx`): 로컬 바이너리.
+           - Image(`image_idx`): 가시적 이미지.
            - **주의**: UUID **호환 불가**.
         3. **인용 형식**: 이미지 `![설명](/api/image/{uuid})`, 파일 `[파일명](/api/asset/{uuid})`.
 
@@ -221,8 +221,8 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
         ### Specs:
         1. **Vision**: Image = Retinal signal. Can view/estimate coords [0, 1000]. Use tools to assist.
         2. **Files**:
-           - `Asset`(`asset_idx`): Local binary.
-           - `Image`(`image_idx`): Visual image.
+           - Asset(`asset_idx`): Local binary.
+           - Image(`image_idx`): Visual image.
            - **Note**: UUIDs **NOT interchangeable**.
         3. **Ref Format**: Image `![desc](/api/image/{uuid})`, File `[name](/api/asset/{uuid})`.
 

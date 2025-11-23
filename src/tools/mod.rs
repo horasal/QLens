@@ -47,10 +47,13 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub fn create_tool(&self, image: Arc<dyn BlobStorage>, asset: Arc<dyn BlobStorage>) -> Box<dyn Tool + Send + Sync> {
+    pub fn create_tool(&self,
+        image: Arc<dyn BlobStorage>,
+        asset: Arc<dyn BlobStorage>,
+        memo: Arc<dyn BlobStorage>) -> Box<dyn Tool + Send + Sync> {
         match self {
             ToolKind::ZoomIn => Box::new(ZoomInTool::new(image)),
-            ToolKind::ImageMemo => Box::new(ImageMemoTool::new(image)),
+            ToolKind::ImageMemo => Box::new(ImageMemoTool::new(image, memo)),
             ToolKind::DrawBbox => Box::new(BboxDrawTool::new(image)),
             ToolKind::JsInterpreter => Box::new(JsInterpreter::new(image, asset)),
             ToolKind::Curl => Box::new(FetchTool::new(image, asset)),

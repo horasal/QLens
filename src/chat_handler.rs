@@ -159,6 +159,7 @@ where
     history: sled::Tree,
     image: sled::Tree,
     asset: sled::Tree,
+    memo: sled::Tree,
     toolset: Arc<ToolSet>,
 }
 
@@ -169,6 +170,7 @@ impl<T: Config> Clone for LLMProvider<T> {
             history: self.history.clone(),
             image: self.image.clone(),
             asset: self.asset.clone(),
+            memo: self.memo.clone(),
             toolset: self.toolset.clone(),
         }
     }
@@ -184,12 +186,14 @@ impl<T: Config> LLMProvider<T> {
         let image_db = db.open_tree("image")?;
         let history_db = db.open_tree("history")?;
         let asset_db = db.open_tree("asset")?;
+        let memo_db = db.open_tree("memo")?;
         tracing::info!("DB started.");
         let image = Arc::new(image_db.clone());
         let asset = Arc::new(asset_db.clone());
+        let memo = Arc::new(memo_db.clone());
         let toolset = active_tools
             .iter()
-            .map(|kind| kind.create_tool(image.clone(), asset.clone()))
+            .map(|kind| kind.create_tool(image.clone(), asset.clone(), memo.clone()))
             .fold(ToolSet::builder(), |ts, t| ts.add_tool(t))
             .build();
         tracing::info!("Active tools: {}", toolset);
@@ -198,6 +202,7 @@ impl<T: Config> LLMProvider<T> {
             history: history_db,
             image: image_db,
             asset: asset_db,
+            memo: memo_db,
             toolset: Arc::new(toolset),
         })
     }
@@ -428,8 +433,16 @@ impl<T: Config> LLMProvider<T> {
                                                 parse_buffer.drain(..FN_NAME.len());
 
                                                 if !reasoning_part.is_empty() {
-                                                    assistant_reasoning.push_str(&reasoning_part);
-                                                    yield ChatEvent::ReasoningDelta(reasoning_part);
+                                                    // 在第一次FNCALL之前，非主动think的时候
+                                                    // 当作普通的文本输出
+                                                    // 对于非thinking的model有必要
+                                                    if assistant_reasoning.is_empty() {
+                                                        assistant_content.push_str(&reasoning_part);
+                                                        yield ChatEvent::ContentDelta(reasoning_part);
+                                                    } else {
+                                                        assistant_reasoning.push_str(&reasoning_part);
+                                                        yield ChatEvent::ReasoningDelta(reasoning_part);
+                                                    }
                                                 }
                                                 yield ChatEvent::ToolDelta(FN_NAME.to_string());
                                                 state = StreamParseState::ToolCallName;

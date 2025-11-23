@@ -1,4 +1,4 @@
-use std::{io::Cursor, sync::Arc};
+use std::{io::Cursor, sync::{Arc, OnceLock}};
 
 use anyhow::anyhow;
 use image::ImageFormat;
@@ -59,7 +59,10 @@ pub fn parse_sourcecode_args(input: &str) -> Result<String, anyhow::Error> {
 pub fn strip_yaml_lead_bar(input: &str) -> &str {
     let clean_input = input.trim_start();
     if clean_input.starts_with('|') || clean_input.starts_with('>') {
-        clean_input.trim_start_matches('|').trim_start_matches('>').trim_start()
+        clean_input
+            .trim_start_matches('|')
+            .trim_start_matches('>')
+            .trim_start()
     } else {
         input
     }
@@ -96,17 +99,34 @@ pub fn convert_to_png(input_data: Vec<u8>) -> Result<Vec<u8>, anyhow::Error> {
         }
     }
 }
-
-pub fn convert_svg_to_png(svg_data: &str) -> Result<Vec<u8>, anyhow::Error> {
+static GLOBAL_USVG_OPTIONS: OnceLock<usvg::Options<'static>> = OnceLock::new();
+pub fn get_usvg_options() -> &'static usvg::Options<'static> {
+    let options = GLOBAL_USVG_OPTIONS.get_or_init(|| {
     let mut font_db = usvg::fontdb::Database::new();
     font_db.load_font_data(FONT_DATA.to_vec());
+    let family = font_db
+        .faces()
+        .next()
+        .and_then(|x| x.families.first())
+        .map(|x| x.0.to_string())
+        .unwrap_or("MapleMono-NF-CN-Regular".to_string());
 
-    let usvg_options = usvg::Options {
+    font_db.set_sans_serif_family(&family);
+    font_db.set_serif_family(&family);
+    font_db.set_monospace_family(&family);
+    font_db.set_cursive_family(&family);
+    font_db.set_fantasy_family(&family);
+    usvg::Options {
         fontdb: Arc::new(font_db),
-        font_family: "MapleMonoNormal-NF-CN-Regular".into(),
+        font_family: family,
         ..Default::default()
-    };
+    }});
 
+    options
+}
+
+pub fn convert_svg_to_png(svg_data: &str) -> Result<Vec<u8>, anyhow::Error> {
+    let usvg_options = get_usvg_options();
     let tree = usvg::Tree::from_str(svg_data, &usvg_options)?;
 
     let svg_size = tree.size();
