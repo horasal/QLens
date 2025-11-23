@@ -10,9 +10,9 @@ use resvg::{tiny_skia, usvg};
 use rqrr::PreparedImage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::time::Instant;
 use std::io::Cursor;
 use std::sync::{Arc, mpsc};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use anyhow::{Error, anyhow};
@@ -32,30 +32,26 @@ impl Tool for JsInterpreter {
             "type": "string",
             "description": "The javascript source code to execute."
         });
-        let capabilities = generate_capabilities_prompt();
+        let libs = generate_libs_list();
+        let cheatsheet = generate_cheatsheet_prompt();
         let description = format!(
-            r##"Executes JavaScript code in a V8 sandbox with DOM and Top-Level async/await support.
-        **Capabilities:**
-        {capabilities}
-        **I/O & Files:**
-        - **Print:** `console.log/error(...)` or `return ...`
-        - **Special Functions:**
-           - `save_svg(svg_string):uuid`: Save and view SVG
-           - `save_blob(Schema, UInt8Array):uuid`, `type Schema = 'asset' | 'image'`: Save blob and view saved image after return
-           - `load_blob(Schema, uuid: String):Uint8Array`: Load blob
-           - `convert_to_png(UInt8Array):UInt8Array`: Convert any valid image to png
-           - `QRCode.save(str,'png'|'svg'):uuid`, `QRCode.decode(uuid|UInt8Array):string`
-
-        **Restrictions:**
-        - NO Network (`fetch` is disabled). Use `curl_url` tool for networking.
-        - NO Canvas. Use d3.js or UPNG for graphics."##);
+            r##"V8 sandbox environments.
+        **Libs:** {libs}
+        **API:**
+        - `save_svg(str):uuid` / `save_blob('asset'|'image', bytes):uuid`
+        - `load_blob('asset'|'image', uuid):bytes`
+        - `convert_to_png(bytes):bytes`
+        - `QRCode.save(str, 'png'|'svg'):uuid` / `QRCode.decode(bytes|uuid):str`
+        **Notes:** NO Network. NO Canvas (Use d3/UPNG). Top-level await OK.
+        **Cheatsheet:** {cheatsheet}"##
+        );
 
         ToolDescription {
             name_for_model: "js_interpreter".to_string(),
             name_for_human: "Javascript代码执行工具".to_string(),
             description_for_model: description,
             parameters: raw_schema,
-            args_format: "输入内容为独立js代码,不能有任何'`等包裹".to_string(),
+            args_format: "Raw JavaScript code string (NO quote/backticks). Use `return` or `console.log` to output.".to_string(),
         }
     }
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
@@ -283,7 +279,8 @@ fn op_qrcode_decode(#[buffer] data: &[u8]) -> Result<String, ImageError> {
     if grids.is_empty() {
         return Err(ImageError::NoDataInQRCode);
     }
-    let (_, content) = grids[0].decode()
+    let (_, content) = grids[0]
+        .decode()
         .map_err(|e| ImageError::QRCodeDecodeError(e))?;
 
     Ok(content)
@@ -333,15 +330,12 @@ fn op_contain_blob(
 fn op_qrcode_png(#[string] text: String) -> Result<Vec<u8>, ImageError> {
     let code = QrCode::new(text.as_bytes())?;
 
-    let image = code.render::<Luma<u8>>()
-        .min_dimensions(200, 200)
-        .build();
+    let image = code.render::<Luma<u8>>().min_dimensions(200, 200).build();
 
     let mut bytes: Vec<u8> = Vec::new();
     let mut cursor = Cursor::new(&mut bytes);
 
-    image::DynamicImage::ImageLuma8(image)
-        .write_to(&mut cursor, image::ImageFormat::Png)?;
+    image::DynamicImage::ImageLuma8(image).write_to(&mut cursor, image::ImageFormat::Png)?;
 
     Ok(bytes)
 }
@@ -351,7 +345,8 @@ fn op_qrcode_png(#[string] text: String) -> Result<Vec<u8>, ImageError> {
 fn op_qrcode_svg(#[string] text: String) -> Result<String, ImageError> {
     let code = QrCode::new(text.as_bytes())?;
 
-    let svg = code.render()
+    let svg = code
+        .render()
         .min_dimensions(200, 200)
         .dark_color(qrcode::render::svg::Color("#000000"))
         .light_color(qrcode::render::svg::Color("#ffffff"))
@@ -383,7 +378,6 @@ fn op_base64_encode(#[buffer] data: &[u8]) -> String {
 fn op_base64_decode(#[string] data: String) -> Result<Vec<u8>, ImageError> {
     Ok(BASE64_STANDARD.decode(data)?)
 }
-
 
 #[op2(fast)]
 fn op_performance_now(state: &mut OpState) -> f64 {
@@ -436,12 +430,12 @@ impl std::fmt::Display for LibCategory {
 }
 
 struct LibraryConfig {
-    require_name: &'static str, // 用于 require('name')
-    global_var: &'static str,   // 注入到 globalThis 的变量名
-    src: &'static str,          // 源码内容
-    category: LibCategory,      // 分类
-    prompt_hint: &'static str,  // Prompt 中的展示文本 (例如: "`_` (Lodash)")
-    after_hook: Option<&'static str>,   // Polyfill用的配置脚本
+    require_name: &'static str,       // 用于 require('name')
+    global_var: &'static str,         // 注入到 globalThis 的变量名
+    src: &'static str,                // 源码内容
+    category: LibCategory,            // 分类
+    prompt_hint: &'static str,        // Prompt 中的展示文本 (例如: "`_` (Lodash)")
+    after_hook: Option<&'static str>, // Polyfill用的配置脚本
 }
 const LOAD_SOURCE: &[LibraryConfig] = &[
     // --- Environment ---
@@ -450,8 +444,9 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         global_var: "LinkeDOM",
         src: include_str!("prelude/linkedom.bundle.js"),
         category: LibCategory::Environment,
-        prompt_hint: "`document`, `window`, `svg` (LinkeDOM simulated)",
-        after_hook: Some(r###"
+        prompt_hint: "`document`, `window`; NO canvas.",
+        after_hook: Some(
+            r###"
         if (globalThis.LinkeDOM) {
             const { parseHTML, XMLSerializer} = globalThis.LinkeDOM;
             const dom = parseHTML('<!doctype html><html><body></body></html>');
@@ -489,7 +484,8 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
             }
         } else {
             Deno.core.ops.console_op_print("stderr: LinkeDOM not loaded!\n", true);
-        }"###),
+        }"###,
+        ),
     },
     // --- Data Processing ---
     LibraryConfig {
@@ -497,20 +493,20 @@ const LOAD_SOURCE: &[LibraryConfig] = &[
         global_var: "_",
         src: include_str!("prelude/lodash.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: r##"`_` (Lodash)
-const users=[{n:'a',g:'tech'},{n:'b',g:'hr'},{n:'c',g:'tech'}];
-console.log(_.groupBy(users,'g'));"##,
-        after_hook: Some(r#"
+        prompt_hint: r##"const users=[{n:'a',g:'tech'},{n:'b',g:'hr'},{n:'c',g:'tech'}];console.log(_.groupBy(users,'g'));"##,
+        after_hook: Some(
+            r#"
         if (typeof _ !== "undefined") {
             globalThis.structuredClone = _.cloneDeep;
-        }"#),
+        }"#,
+        ),
     },
     LibraryConfig {
         require_name: "mathjs",
         global_var: "math",
         src: include_str!("prelude/math.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`math` (Mathjs);math.evaluate('12.7 cm to inch').toString()",
+        prompt_hint: "math.evaluate('12.7 cm to inch').toString()",
         after_hook: None,
     },
     LibraryConfig {
@@ -518,7 +514,7 @@ console.log(_.groupBy(users,'g'));"##,
         global_var: "dayjs",
         src: include_str!("prelude/dayjs.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`dayjs`,dayjs().format('YYYY-MM-DD HH:mm:ss')",
+        prompt_hint: "dayjs().format('YYYY-MM-DD HH:mm:ss')",
         after_hook: None,
     },
     LibraryConfig {
@@ -526,7 +522,7 @@ console.log(_.groupBy(users,'g'));"##,
         global_var: "Papa",
         src: include_str!("prelude/papaparse.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`Papa` (CSV)",
+        prompt_hint: "",
         after_hook: None,
     },
     LibraryConfig {
@@ -534,8 +530,7 @@ console.log(_.groupBy(users,'g'));"##,
         global_var: "aq",
         src: include_str!("prelude/arquero.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: r##"`aq` (Arquero - Dataframes),
-const dt=aq.table({a:[1,2,3],b:[4,5,6]});
+        prompt_hint: r##"const dt=aq.table({a:[1,2,3],b:[4,5,6]});
 console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
         after_hook: None,
     },
@@ -544,7 +539,7 @@ console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
         global_var: "Mustache",
         src: include_str!("prelude/mustache.min.js"),
         category: LibCategory::Utility,
-        prompt_hint: r##"`Mustache` (Templating), const htmlStr=Mustache.render(template,{title:"A",list:["1","2"]});"##,
+        prompt_hint: r##"const htmlStr=Mustache.render(template,{title:"A",list:["1","2"]});"##,
         after_hook: None,
     },
     LibraryConfig {
@@ -552,7 +547,7 @@ console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
         global_var: "nerdamer",
         src: include_str!("prelude/nerdamer.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint: "`nerdamer`. *Symbolic math/calculus/algebra solver `nerdamer('solve(x^2=4, x)').toString()`*",
+        prompt_hint: "nerdamer('solve(x^2=4, x)').toString()",
         after_hook: None,
     },
     // --- Visualization ---
@@ -561,7 +556,7 @@ console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
         global_var: "d3",
         src: include_str!("prelude/d3.v7.min.js"),
         category: LibCategory::Visualization,
-        prompt_hint: "`d3` (D3.js). *Prefer SVG `d3.create('svg')...svg.node().outerHTML`*",
+        prompt_hint: "const svg=d3.create('svg').attr('width',400).attr('height',300);/*draw*/; save_svg(svg.node().outerHTML)",
         after_hook: None,
     },
     LibraryConfig {
@@ -569,11 +564,8 @@ console.log(dt.filter(d=>d.a>1).derive({c:d=>d.a+d.b}).toCSV());"##,
         global_var: "vega",
         src: include_str!("prelude/vega.min.js"),
         category: LibCategory::Visualization,
-        prompt_hint: r##"`vega`&`vegaLite`. Declarative viz with Vega-Lite JSON, width/height must exist in spec.
-const vegaSpec=vegaLite.compile(vlSpec).spec;
-const view=new vega.View(vega.parse(vegaSpec),{renderer:'svg'}).initialize();
-const svg=await view.toSVG();
-        "##,
+        prompt_hint: r##"/*Spec must have width/height*/ const vegaSpec=vegaLite.compile(vlSpec).spec;
+const v=new vega.View(vega.parse(vegaSpec),{renderer:'svg'}).initialize(); save_svg(await v.toSVG());"##,
         after_hook: None,
     },
     LibraryConfig {
@@ -589,11 +581,7 @@ const svg=await view.toSVG();
         global_var: "UPNG",
         src: include_str!("prelude/UPNG.min.js"),
         category: LibCategory::DataProcessing,
-        prompt_hint:
-        r##"`UPNG` (PNG encoder/decoder) for pixel manipulation
-const buffer=new Uint8Array([255,0,0,255]).buffer;
-// encode(buffers,width,height,colorDepth)
-const pngBuffer=UPNG.encode([buffer],1,1,0);"##,
+        prompt_hint: r##"const b=new Uint8Array([255,0,0,255]).buffer;UPNG.encode([b],width,height,depth);"##,
         after_hook: None,
     },
 ];
@@ -604,33 +592,36 @@ impl JsInterpreter {
     }
 }
 
-fn generate_capabilities_prompt() -> String {
-    // 定义我们想要在 Prompt 中展示的顺序
-    let display_order = [
-        LibCategory::DataProcessing,
-        LibCategory::Visualization,
-        LibCategory::Environment,
-        LibCategory::Utility,
-    ];
+const DISPLAY_ORDER: &[LibCategory] = &[
+    LibCategory::DataProcessing,
+    LibCategory::Visualization,
+    LibCategory::Environment,
+    LibCategory::Utility,
+];
 
+fn generate_libs_list() -> String {
     let mut lines = Vec::new();
-
-    for cat in display_order {
-        // 筛选出当前分类的所有库
+    for &cat in DISPLAY_ORDER {
         let items: Vec<String> = LOAD_SOURCE
             .iter()
             .filter(|lib| lib.category == cat)
-            // 过滤掉那些我们不想在 prompt 里强调的库（如果 prompt_hint 为空）
             .filter(|lib| !lib.prompt_hint.is_empty())
-            .map(|lib| lib.prompt_hint.to_string())
+            .map(|lib| format!("{}({})", lib.require_name, lib.global_var))
             .collect();
-
         if !items.is_empty() {
-            lines.push(format!("- **{}:** {}.", cat, items.join(", ")));
+            lines.push(format!("{}:{}", cat, items.join(",")));
         }
     }
+    lines.join(";")
+}
 
-    lines.join("\n")
+fn generate_cheatsheet_prompt() -> String {
+    LOAD_SOURCE
+        .iter()
+        .filter(|lib| !lib.prompt_hint.is_empty())
+        .map(|lib| format!("**{}**:{}", lib.require_name, lib.prompt_hint))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn get_env_script() -> &'static str {
@@ -1003,7 +994,8 @@ fn get_setup_script() -> String {
             }
             return Deno.core.ops.op_qrcode_decode(buffer);
         }
-    };"#.replace("{require_cases}", &require_cases)
+    };"#
+    .replace("{require_cases}", &require_cases)
     .replace("{available_libs}", &available_libs)
     .replace("{memfs_polyfill}", &memfs_polyfill)
     .replace("{RAWHTML}", FN_RAWHTML)

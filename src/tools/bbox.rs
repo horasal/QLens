@@ -17,21 +17,21 @@ use uuid::Uuid;
 
 #[derive(Deserialize, JsonSchema)]
 struct BboxDrawArgs {
-    #[schemars(description = "list of bounding boxes")]
+    #[schemars(description = "bounding boxes to draw.")]
     bboxes: Vec<Bbox>,
 
-    #[schemars(description = "The local uuid of the image to be drawn on")]
+    #[schemars(description = "Target Image UUID.")]
     img_idx: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct Bbox {
     #[schemars(
-        description = "The bounding box of the region as [x1 ,y1, x2, y2], values are cornerrelative coordinates in [0,1000]",
+        description = "[x1 ,y1, x2, y2], cornerrelative coords (scale 0-1000)",
         length(equal = 4)
     )]
     bbox_2d: [f64; 4],
-    #[schemars(description = "The name or label of the object")]
+    #[schemars(description = "Label text.")]
     label: Option<String>,
 }
 
@@ -55,9 +55,9 @@ impl Tool for BboxDrawTool {
         ToolDescription {
             name_for_model: "image_draw_bbox_2d_tool".to_string(),
             name_for_human: "图像标记工具(bbox marker tool)".to_string(),
-            description_for_model: "Draw boxes on specific regions of an image based on given bounding boxes (bbox_2d) and an optional object label".to_string(),
+            description_for_model: "Draw bounding boxes on image. Returns annotated image.".to_string(),
             parameters: serde_json::to_value(schema_for!(BboxDrawArgs)).unwrap(),
-            args_format: "必须是一个JSON对象，其中图片必须用其对应的UUID指代。".to_string(),
+            args_format: "JSON. Img must be UUID.".to_string(),
         }
     }
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>> {

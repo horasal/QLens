@@ -16,20 +16,20 @@ use serde::Deserialize;
 
 #[derive(Deserialize, JsonSchema)]
 struct ZoomArgs {
-    #[schemars(description = "list bounding boxes, each will generated a zoomed image")]
+    #[schemars(description = "Regions to crop&zoom")]
     bbox_list: Vec<Bbox2d>,
-    #[schemars(description = "The local uuid of input image")]
+    #[schemars(description = "Source Image UUID")]
     img_idx: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
 struct Bbox2d {
     #[schemars(
-        description = "The bounding box of the region to zoom in, as [x1, y1, x2, y2], where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right cornerrelative coordinates."
+        description = "[x1, y1, x2, y2] cornerrelative coords (scale 0-1000)"
     )]
     bbox_2d: [f64; 4],
 
-    #[schemars(description = "Optional name or label of the object in the specified bounding box")]
+    #[schemars(description = "Label text")]
     label: Option<String>,
 }
 
@@ -53,9 +53,9 @@ impl Tool for ZoomInTool {
         ToolDescription {
             name_for_model: "image_zoom_in_tool".to_string(),
             name_for_human: "图像局部裁切/放大工具(image crop and zoom-in)".to_string(),
-            description_for_model: "Crop and zoom in on specific regions of an image by cropping it based on a bounding box (bbox) and an optional object label".to_string(),
+            description_for_model: "Crop and zoom image by bbox. Returns new image.".to_string(),
             parameters: serde_json::to_value(schema_for!(ZoomArgs)).unwrap(),
-            args_format: "必须是一个JSON对象，其中图片必须用其对应的UUID指代。".to_string(),
+            args_format: "JSON. Img must be UUID.".to_string(),
         }
     }
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error> {

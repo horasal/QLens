@@ -17,33 +17,35 @@ const MAX_TEXT_LEN: usize = 10 * 1024;
 
 #[derive(Deserialize, JsonSchema)]
 struct FetchArgs {
-    #[schemars(description = "The target URL to fetch content from.")]
+    #[schemars(description = "Target URL")]
     url: String,
 
     #[schemars(
-        description = "HTTP method. Use 'Post' only when submitting data. Defaults to 'Get'."
+        description = "HTTP method(default:Get)"
     )]
     method: Option<FetchMethod>,
 
     #[schemars(
-        description = "Set to true ONLY when you need to analyze Javascript code specifically. Defaults to false (scripts are removed for cleaner reading)."
+        description = "Keep <script> tags in HTML? Default: false"
     )]
     keep_script: Option<bool>,
 
-    #[schemars(description = "string content for POST requests. Ignored for GET requests.")]
+    #[schemars(description = "POST body.")]
     post_content: Option<String>,
     #[schemars(
-        description = "ContentType for `post_content`. Default to `application/json` and ignored for GET requests."
+        description = "POST MIME type(default:application/json)"
     )]
     post_content_type: Option<String>,
 
-    #[schemars(description = "Optional label for this request")]
+    #[schemars(description = "label for this request")]
     label: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema, Copy, Clone)]
 enum FetchMethod {
+    #[serde(alias = "GET", alias = "get")]
     Get,
+    #[serde(alias = "POST", alias = "post")]
     Post,
 }
 
@@ -77,15 +79,13 @@ impl Tool for FetchTool {
         ToolDescription {
             name_for_model: "curl_url".to_string(),
             name_for_human: "网页抓取工具(curl_url)".to_string(),
-            description_for_model:
-"Access and retrieve **remote** content from a specific URL(e.g. http(s)://).
-* Allow to fetch binary and any text-base contents.
-* If remote content is a blob, this tool downloads it into local database returns a local uuid.
-* If the above blob is an image, you will see the image and the image format may be converted for rendering.
-* If remote content is HTML, it will be automatically converted to Markdown and all links are preserved as remote urls.
-* Other text-based content will be returned as-is.".to_string(),
+            description_for_model: "Fetch remote URL.
+    - HTML -> Converted to Markdown automatically.
+    - Binary/Image -> Downloaded to Asset/Image DB, returns UUID.
+    - Text -> Returned as-is.
+    Supports GET/POST.".to_string(),
             parameters: serde_json::to_value(schema_for!(FetchArgs)).unwrap(),
-            args_format: "必须是一个JSON对象".to_string(),
+            args_format: "JSON Object.".to_string(),
         }
     }
 

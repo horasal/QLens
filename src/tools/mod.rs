@@ -1,6 +1,7 @@
 use crate::{blob::BlobStorage, schema::*};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 use uuid::Uuid;
@@ -64,6 +65,26 @@ impl ToolKind {
     }
 }
 
+pub fn compact_schema(schema: &mut Value) {
+    if let Value::Object(map) = schema {
+        // 移除 title (最占地方且无用)
+        map.remove("title");
+        // 移除 examples (除非你特意写了，否则通常是空的或冗余的)
+        map.remove("examples");
+        // 移除 $schema 版本号 (LLM 默认懂)
+        map.remove("$schema");
+
+        // 递归处理子节点
+        for (_, v) in map.iter_mut() {
+            compact_schema(v);
+        }
+    } else if let Value::Array(arr) = schema {
+        for v in arr {
+            compact_schema(v);
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolDescription {
     pub name_for_model: String,
@@ -80,9 +101,9 @@ pub trait Tool {
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error>;
 
     fn get_function_description(&self) -> String {
-        let desc = self.description();
-        let template = "### {name_for_human}\n{name_for_model}: {description_for_model} 输入参数：{parameters} 其他说明：{args_format}\n\n";
-
+        let mut desc = self.description();
+        compact_schema(&mut desc.parameters);
+        let template = "## Tool: {name_for_model}\n- Desc: {description_for_model}\n- Args: {parameters}\n- Hint: {args_format}\n";
         template
             .replace("{name_for_human}", &desc.name_for_human)
             .replace("{name_for_model}", &desc.name_for_model)
