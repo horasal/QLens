@@ -1,4 +1,4 @@
-use crate::{blob::BlobStorage, schema::*};
+use crate::{blob::{BlobStorage}, schema::*};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,6 +26,9 @@ pub use fetch::FetchTool;
 mod utils;
 pub use utils::*;
 
+mod simple;
+pub use simple::*;
+
 #[allow(dead_code)]
 type ToolTrait = Box<dyn Tool + Send + Sync>;
 
@@ -44,19 +47,27 @@ pub enum ToolKind {
     JsInterpreter,
     #[strum(serialize = "curl")]
     Curl,
+    #[strum(serialize = "image")]
+    Image,
+    #[strum(serialize = "asset")]
+    Asset,
 }
 
 impl ToolKind {
-    pub fn create_tool(&self,
+    pub fn create_tool(
+        &self,
         image: Arc<dyn BlobStorage>,
         asset: Arc<dyn BlobStorage>,
-        memo: Arc<dyn BlobStorage>) -> Box<dyn Tool + Send + Sync> {
+        memo: Arc<dyn BlobStorage>,
+    ) -> Box<dyn Tool + Send + Sync> {
         match self {
             ToolKind::ZoomIn => Box::new(ZoomInTool::new(image)),
             ToolKind::ImageMemo => Box::new(ImageMemoTool::new(image, memo)),
             ToolKind::DrawBbox => Box::new(BboxDrawTool::new(image)),
             ToolKind::JsInterpreter => Box::new(JsInterpreter::new(image, asset)),
             ToolKind::Curl => Box::new(FetchTool::new(image, asset)),
+            ToolKind::Image => Box::new(ImageTool::new(image)),
+            ToolKind::Asset => Box::new(AssetTool::new(asset)),
         }
     }
 
@@ -65,6 +76,10 @@ impl ToolKind {
             .map(|t| t.to_string())
             .collect::<Vec<_>>()
             .join(",")
+    }
+
+    pub fn post_register_list() -> Vec<ToolKind> {
+        vec![ToolKind::Image, ToolKind::Asset]
     }
 }
 
@@ -102,6 +117,13 @@ pub trait Tool {
     fn name(&self) -> String;
     fn description(&self) -> ToolDescription;
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error>;
+
+    fn visible_to_human(&self) -> bool {
+        true
+    }
+    fn visible_to_model(&self) -> bool {
+        true
+    }
 
     fn get_function_description(&self) -> String {
         let mut desc = self.description();
@@ -161,8 +183,12 @@ impl ToolSet {
         ToolSetBuilder::new()
     }
 
-    pub fn list_tools(&self) -> Vec<ToolDescription> {
-        self.tools.values().map(|v| v.description()).collect()
+    pub fn list_tools_to_human(&self) -> Vec<ToolDescription> {
+        self.tools
+            .values()
+            .filter(|t| t.visible_to_human())
+            .map(|v| v.description())
+            .collect()
     }
 
     pub fn add_tool(&mut self, tool: Box<dyn Tool + Send + Sync>) -> &mut Self {
@@ -179,32 +205,33 @@ impl ToolSet {
                 let error_msg = format!("错误：未找到名为 '{}' 的工具。", tool_use.function_name);
                 vec![MessageContent::Text(error_msg)]
             }
-            Some(tool) => {
-                match tool.call(&tool_use.args).await {
-                    Ok(content) => content,
-                    Err(e) => {
-                        let error_msg = format!("工具 '{}' 执行失败：{}", tool_use.function_name, e);
-                        vec![MessageContent::Text(error_msg)]
-                    }
+            Some(tool) => match tool.call(&tool_use.args).await {
+                Ok(content) => content,
+                Err(e) => {
+                    let error_msg = format!("工具 '{}' 执行失败：{}", tool_use.function_name, e);
+                    vec![MessageContent::Text(error_msg)]
                 }
-            }
+            },
         };
 
         let origin = tool_use.use_id.clone();
-        (tool_use,
-        Message {
-            id: Uuid::new_v4(),
-            owner: Role::Tools(origin),
-            content: result_content,
-            reasoning: vec![],
-            tool_use: vec![],
-        })
+        (
+            tool_use,
+            Message {
+                id: Uuid::new_v4(),
+                owner: Role::Tools(origin),
+                content: result_content,
+                reasoning: vec![],
+                tool_use: vec![],
+            },
+        )
     }
 
     pub fn system_prompt(&self, lang: whatlang::Lang, parallel_function_calls: bool) -> String {
         let tool_descs = self
             .tools
             .values()
+            .filter(|t| t.visible_to_model())
             .map(|tool| tool.get_function_description())
             .collect::<Vec<String>>()
             .join("\n\n");
@@ -212,6 +239,7 @@ impl ToolSet {
         let tool_names = self
             .tools
             .values()
+            .filter(|t| t.visible_to_model())
             .map(|tool| tool.name())
             .collect::<Vec<String>>()
             .join(",");
@@ -253,17 +281,18 @@ pub const FN_STOP_WORDS: [&str; 4] = [FN_NAME, FN_ARGS, FN_RESULT, FN_EXIT];
 
 #[test]
 fn test_builder() {
+    use crate::blob::SledBlobStorage;
     let db = sled::Config::new()
         .temporary(true)
         .path("./tmp")
         .open()
         .unwrap();
-    let tree = Arc::new(db.open_tree("image").unwrap());
-    let zoom_tool = Box::new(ZoomInTool::new(tree.clone()));
-    let bbox_tool = Box::new(BboxDrawTool::new(tree.clone()));
-    let js_tool = Box::new(JsInterpreter::new(tree.clone() ,tree.clone()));
-    let curl_tool = Box::new(FetchTool::new(tree.clone(), tree.clone()));
-    let mem_tool = Box::new(ImageMemoTool::new(tree.clone()));
+    let blob = Arc::new(SledBlobStorage::new_from_db(&db, "test").unwrap());
+    let zoom_tool = Box::new(ZoomInTool::new(blob.clone()));
+    let bbox_tool = Box::new(BboxDrawTool::new(blob.clone()));
+    let js_tool = Box::new(JsInterpreter::new(blob.clone(), blob.clone()));
+    let curl_tool = Box::new(FetchTool::new(blob.clone(), blob.clone()));
+    let mem_tool = Box::new(ImageMemoTool::new(blob.clone(), blob.clone()));
     let toolset = ToolSet::builder()
         .add_tool(zoom_tool)
         .add_tool(bbox_tool)

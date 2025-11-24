@@ -1,7 +1,10 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolDescription, ToolKind, schema::{Message, MessageContent, Role, ToolUse}, tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet}
+    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolDescription, ToolKind,
+    blob::{BlobStorage, SledBlobStorage},
+    schema::{Message, MessageContent, Role, ToolUse},
+    tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet},
 };
 use anyhow::{Error, anyhow, bail};
 use async_openai::types::{
@@ -157,9 +160,9 @@ where
 {
     client: Arc<Client<T>>,
     history: sled::Tree,
-    image: sled::Tree,
-    asset: sled::Tree,
-    memo: sled::Tree,
+    image: Arc<dyn BlobStorage>,
+    asset: Arc<dyn BlobStorage>,
+    memo: Arc<dyn BlobStorage>,
     toolset: Arc<ToolSet>,
 }
 
@@ -183,14 +186,16 @@ impl<T: Config> LLMProvider<T> {
             .path(db_path)
             .use_compression(true)
             .open()?;
-        let image_db = db.open_tree("image")?;
         let history_db = db.open_tree("history")?;
-        let asset_db = db.open_tree("asset")?;
-        let memo_db = db.open_tree("memo")?;
+        let image = Arc::new(SledBlobStorage::new_from_db(&db, "image")?);
+        let asset = Arc::new(SledBlobStorage::new_from_db(&db, "asset")?);
+        let memo = Arc::new(SledBlobStorage::new_from_db(&db, "memo")?);
         tracing::info!("DB started.");
-        let image = Arc::new(image_db.clone());
-        let asset = Arc::new(asset_db.clone());
-        let memo = Arc::new(memo_db.clone());
+        let active_tools = active_tools
+            .iter()
+            .cloned()
+            .chain(ToolKind::post_register_list().into_iter())
+            .collect::<HashSet<ToolKind>>();
         let toolset = active_tools
             .iter()
             .map(|kind| kind.create_tool(image.clone(), asset.clone(), memo.clone()))
@@ -200,9 +205,9 @@ impl<T: Config> LLMProvider<T> {
         Ok(Self {
             client: Arc::new(client),
             history: history_db,
-            image: image_db,
-            asset: asset_db,
-            memo: memo_db,
+            image: image,
+            asset: asset,
+            memo: memo,
             toolset: Arc::new(toolset),
         })
     }
@@ -212,12 +217,12 @@ impl<T: Config> LLMProvider<T> {
         Ok(models.data.into_iter().map(|x| x.id).collect())
     }
 
-    pub async fn call_tool(&self, tool: ToolUse) -> Message  {
+    pub async fn call_tool(&self, tool: ToolUse) -> Message {
         self.toolset.use_tool_async(tool).await.1
     }
 
     pub fn list_tools(&self) -> Vec<ToolDescription> {
-        self.toolset.list_tools()
+        self.toolset.list_tools_to_human()
     }
 
     pub fn get_history_list(&self) -> Vec<ChatMeta> {
@@ -252,16 +257,17 @@ impl<T: Config> LLMProvider<T> {
     pub fn delete_entry_with_blobs(&self, msg: &Message) {
         for content in msg.content.iter() {
             match content {
-                MessageContent::ImageBin(_, img_id, _) | MessageContent::ImageRef(img_id, _) =>
-                if let Err(e) = self.image.remove(img_id) {
-                    tracing::error!("Failed to cleanup image {}: {}", img_id, e);
-                },
+                MessageContent::ImageBin(_, img_id, _) | MessageContent::ImageRef(img_id, _) => {
+                    if let Err(e) = self.image.release(img_id.clone()) {
+                        tracing::error!("Failed to cleanup image {}: {}", img_id, e);
+                    }
+                }
                 MessageContent::AssetRef(asset_id, _) => {
-                    if let Err(e) = self.asset.remove(asset_id) {
+                    if let Err(e) = self.asset.release(asset_id.clone()) {
                         tracing::error!("Failed to cleanup asset {}: {}", asset_id, e);
                     }
                 }
-                _ => {},
+                _ => {}
             }
         }
     }
@@ -278,11 +284,11 @@ impl<T: Config> LLMProvider<T> {
     }
 
     pub fn save_image(&self, binary: &[u8]) -> Result<Uuid, Error> {
-        safe_save_to_db(&self.image, binary)
+        self.image.save(binary).map_err(|e| e.into())
     }
 
     pub fn save_asset(&self, binary: &[u8]) -> Result<Uuid, Error> {
-        safe_save_to_db(&self.asset, binary)
+        self.asset.save(binary).map_err(|e| e.into())
     }
 
     pub fn new_chat(&self) -> Result<ChatEntry, Error> {
@@ -664,7 +670,7 @@ impl<T: Config> LLMProvider<T> {
             MessageContent::ImageRef(id, label) => {
                 let image_data = self
                     .image
-                    .get(id)?
+                    .get(id.clone())?
                     .ok_or(anyhow::anyhow!("Image {} not in DB", id))?;
                 Ok(MessageContent::ImageBin(
                     image_data.to_vec(),
@@ -836,7 +842,9 @@ impl<T: Config> LLMProvider<T> {
                 MessageContent::AssetRef(_, _) => {
                     // Asset返回描述文字
                     res.push(ChatCompletionRequestToolMessageContentPart::Text(
-                        ChatCompletionRequestMessageContentPartText { text: msg.to_string() },
+                        ChatCompletionRequestMessageContentPartText {
+                            text: msg.to_string(),
+                        },
                     ));
                 }
                 MessageContent::ImageRef(id, _) => {
@@ -1014,17 +1022,4 @@ fn append_message_to_buffer(
     }
     vec.messages.push(content.clone());
     serde_json::to_vec(&vec).map_err(|e| e.into())
-}
-
-
-fn safe_save_to_db(db: &sled::Tree, binary: &[u8]) -> Result<Uuid, Error>{
-    for _ in 0..20 {
-        let uuid = Uuid::new_v4();
-        if db.compare_and_swap(uuid, None::<&[u8]>, Some(binary))?
-            .is_ok()
-        {
-            return Ok(uuid);
-        }
-    }
-    Err(anyhow!("Unable to generate unique id in 20 tries."))
 }

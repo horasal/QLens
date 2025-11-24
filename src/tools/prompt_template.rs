@@ -14,10 +14,9 @@ pub fn get_templates(lang: Lang) -> SystemPromptTemplates {
         ### 能力规范：
         1. **视觉**：图片即视网膜信号，可直接查看或目测相对坐标(x,y范围[0,1000],无关高宽比)。善用工具辅助观察。
         2. **文件格式**：
-           - Asset(`asset_idx`)：本地二进制文件。
-           - Image(`image_idx`)：可见图片。
+           - `Asset(asset_idx)`：本地二进制文件。 - `Image(image_idx)`：可见图片
            - **注意**：两者UUID**不通用**。
-        3. **引用格式**：图片用 `![描述](/api/image/{uuid})`，文件用 `[文件名](/api/asset/{uuid})`。
+           - Markdown引用：图片 `![描述](/api/image/{image_idx})`，文件 `[文件名](/api/asset/{asset_idx})`
 
         日期：{CURRENT_DATE}"###,
             tool_info_template: r###"## 可用工具：

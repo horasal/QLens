@@ -1,6 +1,6 @@
 use crate::blob::{BlobStorage, BlobStorageError};
 use crate::{FN_RAWHTML, FN_RAWSVG, get_usvg_options, parse_sourcecode_args};
-use crate::{MessageContent, Tool, ToolDescription, tools::FONT_DATA};
+use crate::{MessageContent, Tool, ToolDescription};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use deno_error::JsError;

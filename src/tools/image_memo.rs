@@ -97,10 +97,15 @@ impl Tool for ImageMemoTool {
 1. **Complex Reasoning**: Draw diagrams/relations.
 2. **Comparison**: Copy images side-by-side.
 3. **State**: Save intermediate results.
-**Note:** Context is persistent across turns."##.to_string(),
+**Note:** Context is persistent across turns."##
+                .to_string(),
             parameters: serde_json::to_value(schema_for!(ImageMemoArgs)).unwrap(),
             args_format: "JSON.".to_string(),
         }
+    }
+
+    fn visible_to_human(&self) -> bool {
+        false
     }
 
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, anyhow::Error> {
@@ -138,7 +143,12 @@ impl Tool for ImageMemoTool {
                     }
                     LayoutMode::Absolute { bbox } => {
                         let abs_box = to_abs_bbox(bbox, state.width, state.height);
-                        (abs_box[0] as i32, abs_box[1] as i32, abs_box[2] - abs_box[0], abs_box[3] - abs_box[1])
+                        (
+                            abs_box[0] as i32,
+                            abs_box[1] as i32,
+                            abs_box[2] - abs_box[0],
+                            abs_box[3] - abs_box[1],
+                        )
                     }
                 };
 
@@ -166,11 +176,12 @@ impl Tool for ImageMemoTool {
                 let uuid = self.image_db.save(&png_data)?;
                 Ok(vec![
                     MessageContent::Text("✅ Read Success".to_string()),
-                    MessageContent::ImageRef(uuid, "Memo Snapshot".into())])
+                    MessageContent::ImageRef(uuid, "Memo Snapshot".into()),
+                ])
             }
 
             ImageMemoArgs::Undo => {
-                if let Some(l) = state.layers.pop() {
+                if let Some(_l) = state.layers.pop() {
                     state.cursor_y = state
                         .layers
                         .iter()
@@ -187,7 +198,7 @@ impl Tool for ImageMemoTool {
             }
 
             ImageMemoArgs::Clear => {
-                self.memo_db.remove(b"current")?;
+                self.memo_db.delete_raw(b"current")?;
                 Ok(vec![MessageContent::Text("Memo cleared.".into())])
             }
         }
@@ -203,7 +214,7 @@ impl ImageMemoTool {
     }
 
     fn get_state(&self) -> Result<MemoState, anyhow::Error> {
-        if let Some(data) = self.memo_db.get_by_key(b"current")? {
+        if let Some(data) = self.memo_db.get_raw(b"current")? {
             Ok(serde_json::from_slice(&data)?)
         } else {
             Ok(MemoState {
@@ -217,7 +228,7 @@ impl ImageMemoTool {
 
     fn save_state(&self, state: &MemoState) -> Result<(), anyhow::Error> {
         let data = serde_json::to_vec(state)?;
-        self.memo_db.insert(b"current", &data)?;
+        self.memo_db.put_raw(b"current", &data)?;
         Ok(())
     }
 
@@ -327,8 +338,7 @@ impl ImageMemoTool {
             ));
             svg.push_str(&format!(
                 r#"<text x="2" y="{}" dy="-2" class="label">{}</text>"#,
-                y,
-                y
+                y, y
             ));
         }
 

@@ -24,9 +24,7 @@ struct ZoomArgs {
 
 #[derive(Deserialize, JsonSchema)]
 struct Bbox2d {
-    #[schemars(
-        description = "[x1, y1, x2, y2] cornerrelative coords (scale 0-1000)"
-    )]
+    #[schemars(description = "[x1, y1, x2, y2] cornerrelative coords (scale 0-1000)")]
     bbox_2d: [f64; 4],
 
     #[schemars(description = "Label text")]
@@ -64,18 +62,27 @@ impl Tool for ZoomInTool {
         let mut v = Vec::new();
         let image = self.db.get(id)?.ok_or(anyhow!("Image does not exist"))?;
         for b in args.bbox_list.into_iter() {
-            let bbox = BBox {
-                x1: b.bbox_2d[0],
-                y1: b.bbox_2d[1],
-                x2: b.bbox_2d[2],
-                y2: b.bbox_2d[3],
-            };
-            let cropped_img = image_zoom_in(&image, bbox)?;
-            let uuid = self.db.save(&cropped_img)?;
-            v.push(MessageContent::ImageRef(
-                uuid,
-                b.label.unwrap_or("".to_string()),
-            ));
+            // FastPath => full Bbox return original image
+            if b.bbox_2d == [0.0, 0.0, 1000.0, 1000.0] {
+                self.db.retain(id)?;
+                v.push(MessageContent::ImageRef(
+                    id,
+                    b.label.unwrap_or("Full Image".to_string()),
+                ));
+            } else {
+                let bbox = BBox {
+                    x1: b.bbox_2d[0],
+                    y1: b.bbox_2d[1],
+                    x2: b.bbox_2d[2],
+                    y2: b.bbox_2d[3],
+                };
+                let cropped_img = image_zoom_in(&image, bbox)?;
+                let uuid = self.db.save(&cropped_img)?;
+                v.push(MessageContent::ImageRef(
+                    uuid,
+                    b.label.unwrap_or("".to_string()),
+                ));
+            }
         }
         Ok(v)
     }
