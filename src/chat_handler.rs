@@ -1,7 +1,10 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolDescription, ToolKind, AssetId, blob::{BlobStorage, SledBlobStorage}, schema::{Message, MessageContent, Role, ToolUse}, tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet}
+    AssetId, ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, StorageKind, Storages,
+    ToolDescription, ToolKind,
+    schema::{Message, MessageContent, Role, ToolUse},
+    tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet},
 };
 use anyhow::{Error, anyhow, bail};
 use async_openai::types::{
@@ -26,7 +29,6 @@ use async_stream::try_stream;
 use base64::{Engine, prelude::BASE64_STANDARD};
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use sled::IVec;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -156,10 +158,7 @@ where
     T: Config,
 {
     client: Arc<Client<T>>,
-    history: sled::Tree,
-    image: Arc<dyn BlobStorage>,
-    asset: Arc<dyn BlobStorage>,
-    memo: Arc<dyn BlobStorage>,
+    storages: Storages,
     toolset: Arc<ToolSet>,
 }
 
@@ -167,26 +166,20 @@ impl<T: Config> Clone for LLMProvider<T> {
     fn clone(&self) -> Self {
         Self {
             client: self.client.clone(),
-            history: self.history.clone(),
-            image: self.image.clone(),
-            asset: self.asset.clone(),
-            memo: self.memo.clone(),
+            storages: self.storages.clone(),
             toolset: self.toolset.clone(),
         }
     }
 }
 
 impl<T: Config> LLMProvider<T> {
-    pub fn new(client: Client<T>, db_path: &str, active_tools: &[ToolKind]) -> Result<Self, Error> {
-        let db = sled::Config::new()
-            .temporary(false)
-            .path(db_path)
-            .use_compression(true)
-            .open()?;
-        let history_db = db.open_tree("history")?;
-        let image = Arc::new(SledBlobStorage::new_from_db(&db, "image")?);
-        let asset = Arc::new(SledBlobStorage::new_from_db(&db, "asset")?);
-        let memo = Arc::new(SledBlobStorage::new_from_db(&db, "memo")?);
+    pub fn new<P: AsRef<str>>(
+        client: Client<T>,
+        db_path: P,
+        db: StorageKind,
+        active_tools: &[ToolKind],
+    ) -> Result<Self, Error> {
+        let storages = db.create_storages(db_path)?;
         tracing::info!("DB started.");
         let active_tools = active_tools
             .iter()
@@ -195,16 +188,19 @@ impl<T: Config> LLMProvider<T> {
             .collect::<HashSet<ToolKind>>();
         let toolset = active_tools
             .iter()
-            .map(|kind| kind.create_tool(image.clone(), asset.clone(), memo.clone()))
+            .map(|kind| {
+                kind.create_tool(
+                    storages.image.clone(),
+                    storages.asset.clone(),
+                    storages.memo.clone(),
+                )
+            })
             .fold(ToolSet::builder(), |ts, t| ts.add_tool(t))
             .build();
         tracing::info!("Active tools: {}", toolset);
         Ok(Self {
             client: Arc::new(client),
-            history: history_db,
-            image: image,
-            asset: asset,
-            memo: memo,
+            storages,
             toolset: Arc::new(toolset),
         })
     }
@@ -222,30 +218,38 @@ impl<T: Config> LLMProvider<T> {
         self.toolset.list_tools_to_human()
     }
 
-    pub fn get_history_list(&self) -> Vec<ChatMeta> {
-        self.history
-            .iter()
-            .filter_map(|v| v.ok())
-            .filter_map(|(_, v)| serde_json::from_slice::<ChatMeta>(&v).ok())
-            .collect()
+    pub fn get_history_list(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> Result<Vec<ChatMeta>, anyhow::Error> {
+        self.storages
+            .history
+            .list(limit, offset)
+            .map(|v| {
+                v.into_iter()
+                    .filter_map(|(_, v)| serde_json::from_slice::<ChatMeta>(&v).ok())
+                    .collect()
+            })
+            .map_err(|e| e.into())
     }
 
     pub fn get_chat(&self, chat_id: Uuid) -> Result<Option<ChatEntry>, Error> {
-        match self.history.get(chat_id)? {
+        match self.storages.history.get_data(chat_id)? {
             Some(ivec) => Ok(serde_json::from_slice(&ivec)?),
             None => Ok(None),
         }
     }
 
     pub fn get_image(&self, image_id: AssetId) -> Result<Option<Vec<u8>>, Error> {
-        match self.image.get(image_id)? {
+        match self.storages.image.get(image_id)? {
             Some(ivec) => Ok(Some(ivec.to_vec())),
             None => Ok(None),
         }
     }
 
     pub fn get_asset(&self, asset_id: AssetId) -> Result<Option<Vec<u8>>, Error> {
-        match self.image.get(asset_id)? {
+        match self.storages.image.get(asset_id)? {
             Some(ivec) => Ok(Some(ivec.to_vec())),
             None => Ok(None),
         }
@@ -255,12 +259,12 @@ impl<T: Config> LLMProvider<T> {
         for content in msg.content.iter() {
             match content {
                 MessageContent::ImageBin(_, img_id, _) | MessageContent::ImageRef(img_id, _) => {
-                    if let Err(e) = self.image.release(img_id.clone()) {
+                    if let Err(e) = self.storages.image.release(img_id.clone()) {
                         tracing::error!("Failed to cleanup image {}: {}", img_id, e);
                     }
                 }
                 MessageContent::AssetRef(asset_id, _) => {
-                    if let Err(e) = self.asset.release(asset_id.clone()) {
+                    if let Err(e) = self.storages.asset.release(asset_id.clone()) {
                         tracing::error!("Failed to cleanup asset {}: {}", asset_id, e);
                     }
                 }
@@ -270,7 +274,7 @@ impl<T: Config> LLMProvider<T> {
     }
 
     pub fn delete_chat(&self, chat_id: Uuid) -> Result<(), Error> {
-        if let Some(ivec) = self.history.remove(chat_id)? {
+        if let Some(ivec) = self.storages.history.delete(chat_id)? {
             if let Ok(entry) = serde_json::from_slice::<ChatEntry>(&ivec) {
                 for msg in entry.messages {
                     self.delete_entry_with_blobs(&msg);
@@ -281,25 +285,25 @@ impl<T: Config> LLMProvider<T> {
     }
 
     pub fn save_image(&self, binary: &[u8]) -> Result<AssetId, Error> {
-        self.image.save(binary).map_err(|e| e.into())
+        self.storages.image.save(binary).map_err(|e| e.into())
     }
 
     pub fn save_asset(&self, binary: &[u8]) -> Result<AssetId, Error> {
-        self.asset.save(binary).map_err(|e| e.into())
+        self.storages.asset.save(binary).map_err(|e| e.into())
     }
 
     pub fn new_chat(&self) -> Result<ChatEntry, Error> {
-        for _ in 0..20 {
-            let e = ChatEntry::default();
-            if self
-                .history
-                .compare_and_swap(e.id, None::<&[u8]>, Some(serde_json::to_vec(&e)?))?
-                .is_ok()
-            {
-                return Ok(e);
-            }
-        }
-        Err(anyhow!("Unable to generate unique id in 20 tries."))
+        let mut e = ChatEntry::default();
+        let mut meta = ChatMeta::default();
+        let uuid = self.storages.history.append(&[], &[])?;
+        e.id = uuid.clone();
+        meta.id = uuid.clone();
+        self.storages.history.update(
+            uuid,
+            &serde_json::to_vec(&meta)?,
+            &serde_json::to_vec(&e)?,
+        )?;
+        Ok(e)
     }
 
     pub async fn regenerate_at(
@@ -346,8 +350,11 @@ impl<T: Config> LLMProvider<T> {
 
                 entry.messages[index].content = new_content;
 
-                self.history
-                    .insert(chat_id.as_bytes(), serde_json::to_vec(&entry)?)?;
+                self.storages.history.update(
+                    chat_id,
+                    &serde_json::to_vec(&ChatMeta::clone_from(&entry))?,
+                    &serde_json::to_vec(&entry)?,
+                )?;
                 tracing::info!("Edited message {} and truncated history", target_id);
             } else {
                 bail!("Edited message does not belong to user")
@@ -652,9 +659,11 @@ impl<T: Config> LLMProvider<T> {
                 bail!("Unexpected regeneration {} from starting", chat_id);
             }
 
-            //TODO this should be replaced with compare_and_swap
-            self.history
-                .insert(chat_id.as_bytes(), serde_json::to_vec(&entry)?)?;
+            self.storages.history.update(
+                chat_id,
+                &serde_json::to_vec(&ChatMeta::clone_from(&entry))?,
+                &serde_json::to_vec(&entry)?,
+            )?;
         } else {
             tracing::warn!("Target message {} not found in chat {}", target_id, chat_id);
         }
@@ -666,6 +675,7 @@ impl<T: Config> LLMProvider<T> {
         match content {
             MessageContent::ImageRef(id, label) => {
                 let image_data = self
+                    .storages
                     .image
                     .get(id.clone())?
                     .ok_or(anyhow::anyhow!("Image {} not in DB", id))?;
@@ -680,25 +690,14 @@ impl<T: Config> LLMProvider<T> {
     }
 
     fn append_message(&self, chat_id: Uuid, content: Message) -> Result<ChatEntry, Error> {
-        let old_buf = self.history.get(chat_id)?;
-        let mut current_buf = append_message_to_buffer(chat_id, &old_buf, &content)?;
-        for _ in 0..10 {
-            match self.history.compare_and_swap(
-                chat_id,
-                old_buf.clone(),
-                Some(current_buf.clone()),
-            )? {
-                Ok(()) => break,
-                Err(e) => {
-                    tracing::warn!(
-                        "Chat Session {} modified during append new message, try again.",
-                        chat_id
-                    );
-                    current_buf = append_message_to_buffer(chat_id, &e.current, &content)?;
-                }
-            }
-        }
-        Ok(serde_json::from_slice(&current_buf)?)
+        let (_, new_data_bytes) = self.storages.history.update_data_with(
+            chat_id,
+            Box::new(move |_, old_bytes| {
+                    append_message_to_buffer(chat_id, &old_bytes, &content)
+            }),
+        )?;
+        let entry = serde_json::from_slice(&new_data_bytes)?;
+        Ok(entry)
     }
 
     fn message_to_openai(
@@ -852,7 +851,7 @@ impl<T: Config> LLMProvider<T> {
                         },
                     ));
 
-                    match self.image.get(id).map(|v| {
+                    match self.storages.image.get(id).map(|v| {
                         v.map(|v| format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&v)))
                     }) {
                         Ok(Some(b)) => {
@@ -929,7 +928,7 @@ impl<T: Config> LLMProvider<T> {
                     ))
                 }
                 MessageContent::ImageRef(id, _) => {
-                    match self.image.get(id).map(|v| {
+                    match self.storages.image.get(id).map(|v| {
                         v.map(|v| format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&v)))
                     }) {
                         Ok(Some(b)) => {
@@ -979,9 +978,9 @@ impl<T: Config> LLMProvider<T> {
 
 fn append_message_to_buffer(
     chat_id: Uuid,
-    old_buf: &Option<IVec>,
+    old_buf: &Option<Vec<u8>>,
     content: &Message,
-) -> Result<Vec<u8>, Error> {
+) -> Result<(Vec<u8>, Vec<u8>), Error> {
     let mut vec: ChatEntry = match old_buf {
         Some(buf) => {
             if buf.len() > 1 {
@@ -1018,5 +1017,8 @@ fn append_message_to_buffer(
             .collect::<String>();
     }
     vec.messages.push(content.clone());
-    serde_json::to_vec(&vec).map_err(|e| e.into())
+    Ok((
+        serde_json::to_vec(&ChatMeta::clone_from(&vec))?,
+        serde_json::to_vec(&vec)?,
+    ))
 }

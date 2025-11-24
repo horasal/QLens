@@ -11,8 +11,7 @@ use async_openai::{Client, config::OpenAIConfig};
 use axum::{
     Json, Router,
     extract::{
-        DefaultBodyLimit, Multipart, Path, State, WebSocketUpgrade,
-        ws::{Message, WebSocket},
+        DefaultBodyLimit, Multipart, Path, Query, State, WebSocketUpgrade, ws::{Message, WebSocket}
     },
     http::{
         HeaderMap, StatusCode, Uri,
@@ -113,6 +112,9 @@ struct Arguments {
         )]
     tools: Vec<ToolKind>,
 
+    #[clap(long,default_value_t = StorageKind::Sled, help = "Backend Storage")]
+    backend: StorageKind,
+
     #[clap(long, value_enum, default_value_t = PromptLanguage::English)]
     system_prompt_language: PromptLanguage,
 
@@ -184,7 +186,7 @@ fn initialize_provider(arg: &Arguments) -> Result<LLMProvider<OpenAIConfig>> {
         .with_api_key(&arg.api_key);
     let client = Client::with_config(config);
     tracing::info!("Created openai client.");
-    let llm = LLMProvider::new(client, &arg.database_path, &arg.tools)?;
+    let llm = LLMProvider::new(client, &arg.database_path, arg.backend, &arg.tools)?;
     tracing::info!("LLMProvider created.");
     Ok(llm)
 }
@@ -581,8 +583,18 @@ async fn new_chat_handler(State(state): State<Arc<AppState>>) -> Response {
         }
     }
 }
-async fn get_history_handler(State(state): State<Arc<AppState>>) -> Json<Vec<ChatMeta>> {
-    Json(state.llm.get_history_list())
+#[derive(Debug, Deserialize)]
+pub struct PaginationParams {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+async fn get_history_handler(State(state): State<Arc<AppState>>,
+    Query(param): Query<PaginationParams>) -> Response {
+        match state.llm.get_history_list(param.limit, param.offset) {
+            Ok(e) => Json(e).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error {}", e)).into_response()
+        }
 }
 
 async fn delete_chat_handler(
@@ -651,10 +663,7 @@ async fn download_asset_handler(
     match state.llm.get_asset(uuid) {
         Ok(Some(bytes)) => {
             let mut headers = HeaderMap::new();
-            headers.insert(
-                CONTENT_TYPE,
-                "application/octet-stream".parse().unwrap()
-            );
+            headers.insert(CONTENT_TYPE, "application/octet-stream".parse().unwrap());
             (headers, bytes).into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND, "Asset not found").into_response(),
@@ -665,7 +674,10 @@ async fn download_asset_handler(
     }
 }
 
-async fn upload_asset_handler(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+async fn upload_asset_handler(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Response {
     let mut responses = Vec::new();
     loop {
         match multipart.next_field().await {
@@ -716,8 +728,6 @@ async fn upload_asset_handler(State(state): State<Arc<AppState>>, mut multipart:
 
     Json(responses).into_response()
 }
-
-
 
 fn guess_content_type(input_data: &[u8]) -> Result<&str, anyhow::Error> {
     let format = image::guess_format(&input_data)?;

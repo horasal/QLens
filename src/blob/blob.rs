@@ -4,9 +4,9 @@ use crate::AssetId;
 #[derive(Debug, Error)]
 pub enum BlobStorageError {
     #[error("Sled error: {0}")]
-    SledError(#[from] sled::Error),
+    StorageError(#[from] sled::Error),
     #[error("Sled transaction error: {0}")]
-    SledTransactionError(String),
+    StorageTransactionError(String),
     #[error("Data corruption: Invalid reference count bytes")]
     InvalidRefCountData,
     #[error("UUID generation failed after multiple retries")]
@@ -18,7 +18,7 @@ where
     E: std::fmt::Display,
 {
     fn from(e: sled::transaction::TransactionError<E>) -> Self {
-        BlobStorageError::SledTransactionError(format!("{}", e))
+        BlobStorageError::StorageTransactionError(format!("{}", e))
     }
 }
 

@@ -12,9 +12,29 @@ use crate::AssetId;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChatMeta {
-    id: Uuid,
-    date: DateTime<Utc>,
-    summary: String,
+    pub id: Uuid,
+    pub date: DateTime<Utc>,
+    pub summary: String,
+}
+
+impl Default for ChatMeta {
+    fn default() -> Self {
+        Self {
+            id: Uuid::nil(),
+            date: Utc::now(),
+            summary: String::new(),
+        }
+    }
+}
+
+impl ChatMeta {
+    pub fn clone_from(value: &ChatEntry) -> ChatMeta {
+        Self {
+            id: value.id.clone(),
+            date: value.date.clone(),
+            summary: value.summary.clone(),
+        }
+    }
 }
 
 impl From<ChatEntry> for ChatMeta {

@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 tracing-subscriber = "0.3.20"
-uuid = { version = "1.18.1", features = ["js", "serde", "v4"] }
+uuid = { version = "1.18.1", features = ["js", "serde", "v4", "v7"] }
 tokio = {version = "1", features = ["full"]}
 sled = { version = "0.34.7", features = ["zstd", "compression"]}
 serde = { version = "1.0.228", features = ["derive"] }
