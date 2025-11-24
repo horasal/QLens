@@ -108,7 +108,7 @@ struct Arguments {
             long,
             value_delimiter = ',',
             num_args = 1..,
-            default_values_t = vec![ToolKind::ZoomIn, ToolKind::JsInterpreter, ToolKind::DrawBbox, ToolKind::Curl],
+            default_values_t = vec![ToolKind::ZoomIn, ToolKind::JsInterpreter, ToolKind::DrawBbox, ToolKind::Curl, ToolKind::ResourceInspector],
             help = "Tools can be used by Qwen."
         )]
     tools: Vec<ToolKind>,
@@ -617,12 +617,12 @@ async fn get_chat_handler(State(state): State<Arc<AppState>>, Path(uuid): Path<U
 #[derive(Serialize, Deserialize)]
 pub struct UploadResponse {
     file: String,
-    uuid: Uuid,
+    uuid: AssetId,
 }
 
 async fn download_image(
     State(state): State<Arc<AppState>>,
-    Path(uuid): Path<Uuid>,
+    Path(uuid): Path<AssetId>,
 ) -> impl IntoResponse {
     match state.llm.get_image(uuid) {
         Ok(Some(bytes)) => {
@@ -646,7 +646,7 @@ async fn download_image(
 
 async fn download_asset_handler(
     State(state): State<Arc<AppState>>,
-    Path(uuid): Path<Uuid>,
+    Path(uuid): Path<AssetId>,
 ) -> impl IntoResponse {
     match state.llm.get_asset(uuid) {
         Ok(Some(bytes)) => {

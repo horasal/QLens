@@ -1,4 +1,4 @@
-use crate::{blob::{BlobStorage}, schema::*};
+use crate::{blob::BlobStorage, schema::*};
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,6 +51,8 @@ pub enum ToolKind {
     Image,
     #[strum(serialize = "asset")]
     Asset,
+    #[strum(serialize = "resource_inspector")]
+    ResourceInspector,
 }
 
 impl ToolKind {
@@ -68,6 +70,7 @@ impl ToolKind {
             ToolKind::Curl => Box::new(FetchTool::new(image, asset)),
             ToolKind::Image => Box::new(ImageTool::new(image)),
             ToolKind::Asset => Box::new(AssetTool::new(asset)),
+            ToolKind::ResourceInspector => Box::new(ResourceInspector::new(image, asset)),
         }
     }
 
@@ -85,11 +88,8 @@ impl ToolKind {
 
 pub fn compact_schema(schema: &mut Value) {
     if let Value::Object(map) = schema {
-        // 移除 title (最占地方且无用)
         map.remove("title");
-        // 移除 examples (除非你特意写了，否则通常是空的或冗余的)
         map.remove("examples");
-        // 移除 $schema 版本号 (LLM 默认懂)
         map.remove("$schema");
 
         // 递归处理子节点
@@ -166,7 +166,7 @@ impl ToolSetBuilder {
     }
 
     pub fn add_tool(mut self, tool: Box<dyn Tool + Send + Sync>) -> Self {
-        let name = tool.name();
+        let name = tool.name().trim().to_lowercase();
         if self.tools.insert(name.clone(), tool).is_some() {
             tracing::warn!("Overwrite tool '{}'", name);
         }
@@ -192,7 +192,7 @@ impl ToolSet {
     }
 
     pub fn add_tool(&mut self, tool: Box<dyn Tool + Send + Sync>) -> &mut Self {
-        let name = tool.name();
+        let name = tool.name().trim().to_lowercase();
         if self.tools.insert(name.clone(), tool).is_some() {
             tracing::warn!("Overwrite tool '{}'", name);
         }
@@ -200,7 +200,10 @@ impl ToolSet {
     }
 
     pub async fn use_tool_async(&self, tool_use: ToolUse) -> (ToolUse, Message) {
-        let result_content = match self.tools.get(&tool_use.function_name) {
+        let result_content = match self
+            .tools
+            .get(&tool_use.function_name.trim().to_lowercase())
+        {
             None => {
                 let error_msg = format!("错误：未找到名为 '{}' 的工具。", tool_use.function_name);
                 vec![MessageContent::Text(error_msg)]

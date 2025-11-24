@@ -9,6 +9,7 @@
 	import { settings } from '$lib/stores/settingsStore';
 	import { playgroundState } from '$lib/stores/artifactStore';
 	import { showArtifacts } from '$lib/stores/settingsStore';
+	import CollapsibleText from './CollapsibleText.svelte';
 
 	const dispatch = createEventDispatcher();
 	let chatContainer: HTMLElement;
@@ -328,12 +329,10 @@
 							{:else}
 								{#each message.content as item}
 									{#if 'Text' in item}
-										<div class="whitespace-pre-wrap">
-											<MarkdownBlock
-												content={item.Text}
-												on:imageClick={(e) => onImageClick(e.detail)}
-											/>
-										</div>
+										<CollapsibleText
+											text={item.Text}
+											on:imageClick={(e) => onImageClick(e.detail)}
+										/>
 									{:else if 'ImageRef' in item || 'ImageBin' in item}
 										<div
 											class="relative h-24 w-24 overflow-hidden rounded-lg border border-base-300 bg-base-100 shadow-sm transition-transform hover:scale-105"
@@ -351,9 +350,9 @@
 									{:else if 'AssetRef' in item}
 										{@const [uuid, desc] = item.AssetRef}
 										<a
-										    href={`/api/asset/${uuid}`}
+											href={`/api/asset/${uuid}`}
 											target="_blank"
-											download={desc || `${uuid}` || "download"}
+											download={desc || `${uuid}` || 'download'}
 											class="flex h-24 w-24 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border border-base-300 bg-base-200 p-2 shadow-sm transition-colors hover:bg-base-300"
 											title={desc}
 										>

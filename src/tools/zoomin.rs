@@ -4,8 +4,8 @@ use image::{
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
-use uuid::Uuid;
 
+use crate::AssetId;
 use crate::blob::BlobStorage;
 use crate::schema::MessageContent;
 use crate::tools::{Tool, ToolDescription};
@@ -58,7 +58,7 @@ impl Tool for ZoomInTool {
     }
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>, Error> {
         let args: ZoomArgs = parse_tool_args(args)?;
-        let id = Uuid::from_str(&args.img_idx)?;
+        let id = AssetId::from_str(&args.img_idx)?;
         let mut v = Vec::new();
         let image = self.db.get(id)?.ok_or(anyhow!("Image does not exist"))?;
         for b in args.bbox_list.into_iter() {

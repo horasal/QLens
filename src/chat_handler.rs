@@ -1,10 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{
-    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolDescription, ToolKind,
-    blob::{BlobStorage, SledBlobStorage},
-    schema::{Message, MessageContent, Role, ToolUse},
-    tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet},
+    ChatEntry, ChatMeta, FN_MAX_LEN, FN_STOP_WORDS, ToolDescription, ToolKind, AssetId, blob::{BlobStorage, SledBlobStorage}, schema::{Message, MessageContent, Role, ToolUse}, tools::{FN_ARGS, FN_EXIT, FN_NAME, FN_RESULT, ToolSet}
 };
 use anyhow::{Error, anyhow, bail};
 use async_openai::types::{
@@ -240,14 +237,14 @@ impl<T: Config> LLMProvider<T> {
         }
     }
 
-    pub fn get_image(&self, image_id: Uuid) -> Result<Option<Vec<u8>>, Error> {
+    pub fn get_image(&self, image_id: AssetId) -> Result<Option<Vec<u8>>, Error> {
         match self.image.get(image_id)? {
             Some(ivec) => Ok(Some(ivec.to_vec())),
             None => Ok(None),
         }
     }
 
-    pub fn get_asset(&self, asset_id: Uuid) -> Result<Option<Vec<u8>>, Error> {
+    pub fn get_asset(&self, asset_id: AssetId) -> Result<Option<Vec<u8>>, Error> {
         match self.image.get(asset_id)? {
             Some(ivec) => Ok(Some(ivec.to_vec())),
             None => Ok(None),
@@ -283,11 +280,11 @@ impl<T: Config> LLMProvider<T> {
         Ok(())
     }
 
-    pub fn save_image(&self, binary: &[u8]) -> Result<Uuid, Error> {
+    pub fn save_image(&self, binary: &[u8]) -> Result<AssetId, Error> {
         self.image.save(binary).map_err(|e| e.into())
     }
 
-    pub fn save_asset(&self, binary: &[u8]) -> Result<Uuid, Error> {
+    pub fn save_asset(&self, binary: &[u8]) -> Result<AssetId, Error> {
         self.asset.save(binary).map_err(|e| e.into())
     }
 

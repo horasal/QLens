@@ -1,3 +1,4 @@
+use crate::{AssetId, AssetIdError};
 use crate::blob::{BlobStorage, BlobStorageError};
 use crate::{FN_RAWHTML, FN_RAWSVG, get_usvg_options, parse_sourcecode_args};
 use crate::{MessageContent, Tool, ToolDescription};
@@ -11,9 +12,9 @@ use rqrr::PreparedImage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
+use std::str::FromStr;
 use std::sync::{Arc, mpsc};
 use tokio::time::Instant;
-use uuid::Uuid;
 
 use anyhow::{Error, anyhow};
 use deno_core::{JsRuntime, OpState, RuntimeOptions, extension, op2, scope, v8};
@@ -84,15 +85,15 @@ struct CodeResult {
     return_value: String,
     terminal: String,
     #[serde(skip)]
-    uuids_img: Vec<Uuid>,
+    uuids_img: Vec<AssetId>,
     #[serde(skip)]
-    uuids_asset: Vec<Uuid>,
+    uuids_asset: Vec<AssetId>,
 }
 
 struct LogSender(mpsc::Sender<String>);
 struct UuidSender {
-    image: mpsc::Sender<Uuid>,
-    asset: mpsc::Sender<Uuid>,
+    image: mpsc::Sender<AssetId>,
+    asset: mpsc::Sender<AssetId>,
 }
 struct DbHandle {
     image: Arc<dyn BlobStorage>,
@@ -114,7 +115,7 @@ enum ImageError {
     #[error("Blob does not exist")]
     ImageEmpty,
     #[error("Invalid UUID {0}")]
-    InvalidUuid(#[from] uuid::Error),
+    InvalidUuid(#[from] AssetIdError),
     #[error("Database save error {0}")]
     DatabaseError(#[from] BlobStorageError),
     #[error("Limit reached, can not save image any more")]
@@ -275,7 +276,7 @@ fn op_load_blob(
     #[string] uuid_str: String,
 ) -> Result<Vec<u8>, ImageError> {
     let schema = Schema::parse(&schema)?;
-    let uuid = uuid::Uuid::parse_str(&uuid_str).map_err(|e| ImageError::InvalidUuid(e))?;
+    let uuid = AssetId::from_str(&uuid_str).map_err(|e| ImageError::InvalidUuid(e))?;
     let db = state.borrow::<DbHandle>();
     match match schema {
         Schema::Asset => db.asset.get(uuid),
@@ -294,7 +295,7 @@ fn op_contain_blob(
     #[string] uuid_str: String,
 ) -> Result<bool, ImageError> {
     let schema = Schema::parse(&schema)?;
-    let uuid = uuid::Uuid::parse_str(&uuid_str).map_err(|e| ImageError::InvalidUuid(e))?;
+    let uuid = AssetId::from_str(&uuid_str).map_err(|e| ImageError::InvalidUuid(e))?;
     let db = state.borrow::<DbHandle>();
     match match schema {
         Schema::Asset => db.asset.get(uuid),
@@ -1010,8 +1011,8 @@ fn run_code(
         code
     );
     let (tx, rx) = mpsc::channel::<String>();
-    let (tx_img, rx_img) = mpsc::channel::<Uuid>();
-    let (tx_asset, rx_asset) = mpsc::channel::<Uuid>();
+    let (tx_img, rx_img) = mpsc::channel::<AssetId>();
+    let (tx_asset, rx_asset) = mpsc::channel::<AssetId>();
 
     let mut js_runtime = JsRuntime::new(RuntimeOptions {
         extensions: vec![sandbox_ext::init()],
@@ -1086,8 +1087,8 @@ fn run_code(
     drop(tx_asset);
 
     let logs: String = rx.into_iter().collect();
-    let uuids_img: Vec<Uuid> = rx_img.into_iter().collect();
-    let uuids_asset: Vec<Uuid> = rx_asset.into_iter().collect();
+    let uuids_img: Vec<AssetId> = rx_img.into_iter().collect();
+    let uuids_asset: Vec<AssetId> = rx_asset.into_iter().collect();
     Ok(CodeResult {
         return_value: res,
         terminal: logs,

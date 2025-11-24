@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    MessageContent, Tool, ToolDescription, blob::BlobStorage, get_usvg_options, parse_tool_args,
+    MessageContent, Tool, ToolDescription, AssetId, blob::BlobStorage, get_usvg_options,
+    parse_tool_args,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -34,7 +35,7 @@ pub struct Layer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LayerKind {
-    ImageRef(Uuid),
+    ImageRef(AssetId),
     SvgContent(String),
 }
 
@@ -117,7 +118,7 @@ impl Tool for ImageMemoTool {
                 let (kind, src_w, src_h) = match content {
                     MemoContentInput::Svg(s) => (LayerKind::SvgContent(s), 200, 200),
                     MemoContentInput::Image(uuid_str) => {
-                        let uuid = Uuid::from_str(&uuid_str)?;
+                        let uuid = AssetId::from_str(&uuid_str)?;
                         let bytes = self.image_db.get(uuid)?.ok_or(anyhow!("Img not found"))?;
                         let meta = image::load_from_memory(&bytes)?;
                         (LayerKind::ImageRef(uuid), meta.width(), meta.height())

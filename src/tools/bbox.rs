@@ -1,3 +1,4 @@
+use crate::AssetId;
 use crate::blob::BlobStorage;
 use crate::schema::MessageContent;
 use crate::tools::{FONT_DATA, Tool, ToolDescription};
@@ -13,7 +14,6 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::str::FromStr;
 use std::sync::Arc;
-use uuid::Uuid;
 
 #[derive(Deserialize, JsonSchema)]
 struct BboxDrawArgs {
@@ -55,14 +55,15 @@ impl Tool for BboxDrawTool {
         ToolDescription {
             name_for_model: "image_draw_bbox_2d_tool".to_string(),
             name_for_human: "图像标记工具(bbox marker tool)".to_string(),
-            description_for_model: "Draw bounding boxes on image. Returns annotated image.".to_string(),
+            description_for_model: "Draw bounding boxes on image. Returns annotated image."
+                .to_string(),
             parameters: serde_json::to_value(schema_for!(BboxDrawArgs)).unwrap(),
             args_format: "JSON. Img must be UUID.".to_string(),
         }
     }
     async fn call(&self, args: &str) -> Result<Vec<MessageContent>> {
         let args: BboxDrawArgs = parse_tool_args(args)?;
-        let id = Uuid::from_str(&args.img_idx)?;
+        let id = AssetId::from_str(&args.img_idx)?;
         let image = self
             .db
             .get(id)?
@@ -74,25 +75,25 @@ impl Tool for BboxDrawTool {
 }
 
 const COLOR_MAP: &[Rgba<u8>] = &[
-    Rgba([255, 0, 0, 255]),   // 1. 红色 (Red)
-    Rgba([0, 255, 0, 255]),   // 2. 绿色 (Green)
-    Rgba([0, 0, 255, 255]),   // 3. 蓝色 (Blue)
-    Rgba([255, 255, 0, 255]), // 4. 黄色 (Yellow)
-    Rgba([0, 255, 255, 255]), // 5. 青色 (Cyan)
-    Rgba([255, 0, 255, 255]), // 6. 品红 (Magenta)
-    Rgba([255, 128, 0, 255]), // 7. 橙色 (Orange)
-    Rgba([128, 0, 255, 255]), // 8. 紫色 (Purple)
-    Rgba([0, 128, 0, 255]),   // 9. 深绿 (Dark Green)
-    Rgba([0, 128, 128, 255]), // 10. 蓝绿色 (Teal)
-    Rgba([128, 128, 0, 255]), // 11. 橄榄色 (Olive)
-    Rgba([255, 0, 128, 255]), // 12. 玫瑰红 (Rose)
-    Rgba([255, 165, 0, 255]), // 13. 亮橙色 (Bright Orange)
-    Rgba([128, 0, 0, 255]),   // 14. 栗色 (Maroon)
-    Rgba([0, 0, 128, 255]),   // 15. 海军蓝 (Navy)
-    Rgba([170, 110, 40, 255]), // 16. 棕色 (Brown)
+    Rgba([255, 0, 0, 255]),     // 1. 红色 (Red)
+    Rgba([0, 255, 0, 255]),     // 2. 绿色 (Green)
+    Rgba([0, 0, 255, 255]),     // 3. 蓝色 (Blue)
+    Rgba([255, 255, 0, 255]),   // 4. 黄色 (Yellow)
+    Rgba([0, 255, 255, 255]),   // 5. 青色 (Cyan)
+    Rgba([255, 0, 255, 255]),   // 6. 品红 (Magenta)
+    Rgba([255, 128, 0, 255]),   // 7. 橙色 (Orange)
+    Rgba([128, 0, 255, 255]),   // 8. 紫色 (Purple)
+    Rgba([0, 128, 0, 255]),     // 9. 深绿 (Dark Green)
+    Rgba([0, 128, 128, 255]),   // 10. 蓝绿色 (Teal)
+    Rgba([128, 128, 0, 255]),   // 11. 橄榄色 (Olive)
+    Rgba([255, 0, 128, 255]),   // 12. 玫瑰红 (Rose)
+    Rgba([255, 165, 0, 255]),   // 13. 亮橙色 (Bright Orange)
+    Rgba([128, 0, 0, 255]),     // 14. 栗色 (Maroon)
+    Rgba([0, 0, 128, 255]),     // 15. 海军蓝 (Navy)
+    Rgba([170, 110, 40, 255]),  // 16. 棕色 (Brown)
     Rgba([250, 190, 212, 255]), // 17. 粉色 (Pink)
-    Rgba([70, 240, 240, 255]), // 18. 亮天蓝 (Light Sky Blue)
-    Rgba([245, 130, 48, 255]), // 19. 杏色 (Apricot)
+    Rgba([70, 240, 240, 255]),  // 18. 亮天蓝 (Light Sky Blue)
+    Rgba([245, 130, 48, 255]),  // 19. 杏色 (Apricot)
     Rgba([128, 128, 128, 255]), // 20. 灰色 (Gray)
 ];
 
@@ -142,15 +143,17 @@ fn draw_bboxes_rgba(image_data: &[u8], bboxes: &[Bbox]) -> Result<Vec<u8>, anyho
         if (x2 - x1) <= 0 || (y2 - y1) <= 0 {
             continue;
         }
-
         for i in 0..border_thickness {
-            let rect = Rect::at(x1 + i, y1 + i).of_size(
-                (x2 - x1 - 2 * i).max(0) as u32,
-                (y2 - y1 - 2 * i).max(0) as u32,
-            );
-            if rect.width() > 0 && rect.height() > 0 {
-                draw_hollow_rect_mut(&mut image_buffer, rect, color);
+            let current_w = x2 - x1 - 2 * i;
+            let current_h = y2 - y1 - 2 * i;
+
+            if current_w <= 0 || current_h <= 0 {
+                break;
             }
+
+            let rect = Rect::at(x1 + i, y1 + i).of_size(current_w as u32, current_h as u32);
+
+            draw_hollow_rect_mut(&mut image_buffer, rect, color);
         }
 
         if let Some(ref text) = item.label {
