@@ -96,9 +96,9 @@ jobs:
       - name: 下载并配置字体资源
         shell: bash
         run: |
-          curl -L -o font.zip https://github.com/subframe7536/maple-font/releases/download/v7.6/MapleMonoNL-NF-CN.zip
-          unzip -j -o font.zip "MapleMonoNL-NF-CN-Regular.ttf"
-          mv MapleMonoNL-NF-CN-Regular.ttf font.ttf
+          curl -L -o font.zip https://github.com/subframe7536/maple-font/releases/download/v7.6/MapleMono-NF-CN.zip
+          unzip -j -o font.zip "MapleMono-NF-CN-Regular.ttf"
+          mv MapleMono-NF-CN-Regular.ttf font.ttf
           rm font.zip
 
       - name: 构建 Rust 二进制文件
