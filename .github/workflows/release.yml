@@ -23,19 +23,27 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: 缓存 Deno 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.deno
+            ~/.cache/deno
+          key: ${{ runner.os }}-deno-${{ hashFiles('frontend/deno.lock') }}
+
       - name: 安装依赖
-        working-directory: frontend_clean
+        working-directory: frontend
         run: deno install
 
       - name: 构建 SvelteKit 静态站点
-        working-directory: frontend_clean
+        working-directory: frontend
         run: deno task build
 
       - name: 上传前端 artifact
         uses: actions/upload-artifact@v4
         with:
           name: ui-build
-          path: frontend_clean/build/
+          path: frontend/build/
 
   build-backend:
     needs: build-frontend
@@ -45,18 +53,18 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            bin_name: server
-            asset_name: qlens-linux-amd64
+            bin_name: qlens-server
+            asset_name: qlens-server-linux-amd64
 
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin_name: server.exe
-            asset_name: qlens-windows-amd64.exe
+            bin_name: qlens-server.exe
+            asset_name: qlens-server-windows-amd64.exe
 
           - os: macos-latest
             target: aarch64-apple-darwin
-            bin_name: server
-            asset_name: qlens-macos-arm64
+            bin_name: qlens-server
+            asset_name: qlens-server-macos-arm64
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -67,12 +75,23 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ui-build
-          path: frontend_clean/build
+          path: frontend/build
 
       - name: 设置 Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: 缓存 Rust
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: 下载并配置字体资源
         shell: bash
@@ -83,7 +102,7 @@ jobs:
           rm font.zip
 
       - name: 构建 Rust 二进制文件
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --package qlens-server --target ${{ matrix.target }}
 
       - name: 重命名二进制文件
         shell: bash
@@ -103,12 +122,13 @@ jobs:
       - name: 下载所有已编译的二进制文件
         uses: actions/download-artifact@v4
         with:
+          pattern: qlens-server-*
           path: dist
           merge-multiple: true
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/qlens-*
+          files: dist/*
           tag_name: ${{ inputs.tag_name || github.ref_name }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
