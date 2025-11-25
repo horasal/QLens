@@ -1,55 +1,16 @@
-[package]
-name = "chat_ui"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+    "crates/core",
+    "crates/cli",
+    "crates/backend",
+    "src-tauri",
+]
 
-[dependencies]
-tracing-subscriber = "0.3.20"
-uuid = { version = "1.18.1", features = ["js", "serde", "v4", "v7"] }
-tokio = {version = "1", features = ["full"]}
-sled = { version = "0.34.7", features = ["zstd", "compression"]}
-serde = { version = "1.0.228", features = ["derive"] }
-chrono = { version = "0.4.42", features = ["serde"] }
-serde_json = "1.0.145"
-thiserror = "2.0.17"
-image = { version = "0.25.8", features = ["default-formats"] }
-base64 = "0.22.1"
-anyhow = "1.0.100"
-schemars = "1.1.0"
-tracing = "0.1.41"
-async-openai = {git = "https://github.com/horasal/async-openai", branch = "main"}
-futures = "0.3.31"
-async-stream = "0.3.6"
-imageproc = "0.25.0"
-ab_glyph = "0.2.32"
-clap = { version = "4.5", features = ["derive"] }
-axum = { version = "0.8", features = ["multipart", "ws"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "limit","compression-gzip"] }
-rust-embed = { version = "8.9", features = ["axum"] }
-mime_guess = "2.0"
-resvg = "0.45"
-whatlang = { version = "0.18", features = ["serde"] }
-deno_core = "0.368.0"
-deno_error = "0.7.0"
-reqwest = { version = "0.12.24", features = ["json", "stream", "multipart"] }
-htmd = "0.4.0"
-mime = "0.3.17"
-strum = { version = "0.27.2", features = ["derive"] }
-serde_yaml = "0.9.34"
-tokio-util = "0.7.17"
-async-trait = "0.1.89"
-qrcode = "0.14.1"
-rqrr = "0.10.0"
-infer = "0.19.0"
-num-bigint = "0.4.6"
-num-traits = "0.2.19"
-blake3 = "1.8.2"
-redb = "3.1.0"
+resolver = "2"
 
 [profile.release]
 strip = true
 lto = true
-
 
 [patch.crates-io]
 serde_json = {git = "https://github.com/horasal/json", branch = "master"}

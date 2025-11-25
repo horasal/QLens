@@ -1,0 +1,20 @@
+[package]
+name = "backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.8.7", features = ["ws", "multipart"] }
+tokio = { version = "1.48.0", features = ["full"] }
+tower-http = { version = "0.6.7", features = ["fs", "cors", "limit", "compression-gzip"] }
+async-openai = {git = "https://github.com/horasal/async-openai", branch = "main"}
+anyhow = "1.0.100"
+tokio-util = "0.7.17"
+serde = { version = "1.0.228", features = ["derive"] }
+futures = "0.3.31"
+tracing = "0.1.41"
+uuid = { version = "1.18.1", features = ["v4", "serde", "js"] }
+chat_ui = { path = "../core"}
+mime_guess = "2.0.5"
+serde_json = "1.0.145"
+image = "0.25.9"
