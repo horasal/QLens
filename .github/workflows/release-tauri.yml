@@ -74,4 +74,4 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-          projectPath: "src-tauri"
+          #projectPath: "src-tauri"

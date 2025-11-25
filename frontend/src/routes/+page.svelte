@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
 	import { _ } from 'svelte-i18n';
 	import { isLoading as i18nLoading } from 'svelte-i18n';
@@ -18,12 +18,14 @@
 	import { isDragging, isLoading as isGlobalLoading } from '$lib/stores/chatStore';
 	import SettingsModal from '$lib/components/SettingsModal.svelte';
 	import { showSettings, showArtifacts } from '$lib/stores/settingsStore';
+	import { isTauri } from "@tauri-apps/api/core";
 
 	initI18n();
 
 	// 绑定子组件实例，用于调用方法
 	let chatInputComponent: ChatInput;
 	let modalImageUrl: string | null = null;
+    let unlistenTauriDrop: () => void;
 
 	onMount(async () => {
 		await ChatService.init();
@@ -32,7 +34,35 @@
 		if (urlId) {
 			ChatService.loadChat(urlId);
 		}
+		if (isTauri()) {
+            const { getCurrentWebview }  = await import("@tauri-apps/api/webview");
+            const { tauriPathsToWebFiles } = await import('$lib/services/tauri');
+            const unlisten = await getCurrentWebview().onDragDropEvent(async (event) => {
+             if (event.payload.type === 'over') {
+               isDragging.set(true);
+             } else if (event.payload.type === 'drop') {
+               isDragging.set(false);
+				const paths = event.payload.paths;
+				if (paths && paths.length > 0) {
+					const files = await tauriPathsToWebFiles(paths);
+					if (files.length > 0) {
+						chatInputComponent?.addFiles(files);
+					}
+				}
+             } else {
+               isDragging.set(false);
+             }
+            });
+
+			unlistenTauriDrop = () => {
+				unlisten();
+			};
+		}
 	});
+
+	onDestroy(() => {
+        if (unlistenTauriDrop) unlistenTauriDrop();
+    });
 
 	// --- 图片预览 Modal ---
 	function showImageModal(src: string) {

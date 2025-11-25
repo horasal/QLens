@@ -3,6 +3,7 @@ import markdownItKatex from '@vscode/markdown-it-katex';
 import markdownItLinkAttributes from 'markdown-it-link-attributes';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
+import { getApiBase } from './services/baseUrl';
 
 const md = markdownit({
 	html: false,
@@ -76,8 +77,15 @@ const defaultImageRender =
 
 md.renderer.rules.image = function (tokens, idx, options, env, self) {
 	const token = tokens[idx];
-	const src = token.attrGet('src') || '';
+	let src = token.attrGet('src') || '';
 	const alt = token.content;
+
+	const apiBase = getApiBase();
+	console.log(apiBase);
+	if (src.startsWith('/api') && apiBase) {
+		src = `${apiBase}${src}`;
+		token.attrSet('src', src);
+	}
 
 	if (env && env.disableImages) {
 		return `
@@ -123,7 +131,7 @@ export function renderMarkdown(text: string, options: RenderOptions = {}): strin
 			'mtr',
 			'mrow',
 			'msqrt',
-			'munderover',
+			'munderover'
 		],
 		ADD_ATTR: ['style', 'target', 'rel', 'class']
 	});

@@ -13,6 +13,7 @@
 	import { oneDark } from '@codemirror/theme-one-dark';
 	import SmartForm from './SmartForm.svelte'; // 使用新的表单组件
 	import { EditorView } from '@codemirror/view';
+	import { getApiBase } from '$lib/services/baseUrl';
 
 	const dispatch = createEventDispatcher();
 
@@ -133,7 +134,7 @@
 			msg.content.forEach((item) => {
 				if ('ImageRef' in item) {
 					images.push({
-						src: `/api/image/${item.ImageRef[0]}`,
+						src: `${getApiBase()}/api/image/${item.ImageRef[0]}`,
 						alt: item.ImageRef[1] || 'Image',
 						code: relatedCode,
 						toolName: relatedToolName,
@@ -479,14 +480,14 @@
 									>
 										<img
 											src={'ImageRef' in item
-												? `/api/image/${item.ImageRef[0]}`
+												? `${getApiBase()}/api/image/${item.ImageRef[0]}`
 												: `data:image/png;base64,${item.ImageBin[0]}`}
 											alt="Result"
 											class="max-h-60 w-auto cursor-zoom-in object-contain transition-transform"
 											on:click={() =>
 												handleGalleryClick(
 													'ImageRef' in item
-														? `/api/image/${item.ImageRef[0]}`
+														? `${getApiBase()}/api/image/${item.ImageRef[0]}`
 														: `data:image/png;base64,${item.ImageBin[0]}`
 												)}
 											draggable="true"
@@ -495,7 +496,7 @@
 												if (e.dataTransfer) {
 													const src =
 														'ImageRef' in item
-															? `/api/image/${item.ImageRef[0]}`
+															? `${getApiBase()}/api/image/${item.ImageRef[0]}`
 															: `data:image/png;base64,${item.ImageBin[0]}`;
 													const markdown = `![Generated Image](${src})`;
 													e.dataTransfer.setData('text/plain', markdown);
@@ -511,7 +512,7 @@
 												<button
 													class="btn btn-square border-0 bg-base-100/80 text-primary shadow-sm backdrop-blur-sm btn-xs hover:bg-white"
 													on:click|stopPropagation={(e) =>
-														copyUUID(e, `/api/image/${item.ImageRef[0]}`)}
+														copyUUID(e, `${getApiBase()}/api/image/${item.ImageRef[0]}`)}
 													title="Copy UUID"
 												>
 													<svg
@@ -530,7 +531,7 @@
 
 											<a
 												href={'ImageRef' in item
-													? `/api/image/${item.ImageRef[0]}`
+													? `${getApiBase()}/api/image/${item.ImageRef[0]}`
 													: `data:image/png;base64,${item.ImageBin[0]}`}
 												target="_blank"
 												class="btn btn-square border-0 bg-base-100/80 text-base-content/70 shadow-sm backdrop-blur-sm btn-xs hover:bg-primary hover:text-white"

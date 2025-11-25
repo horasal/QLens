@@ -29,7 +29,7 @@
 		return ext ? TEXT_EXTENSIONS.has(ext) : false;
 	}
 
-	async function handleFiles(fileList: FileList | null) {
+	async function handleFiles(fileList: FileList | File[] | null) {
 		if (!fileList) return;
 		const files = Array.from(fileList);
 
@@ -51,7 +51,7 @@
 					pendingFiles = [...pendingFiles, { type: 'text_content', file, content: text, id }];
 					toasts.show(`Loaded ${file.name} as text snippet`, 'success');
 				} catch (e) {
-					toasts.show(`Failed to read ${file.name}`, 'error');
+					toasts.show(`Failed to read ${file.name}: ${e}`, 'error');
 				}
 			}
 			// 其他文件或大文本 -> MessageContent::AssetRef
@@ -70,7 +70,7 @@
 		}
 	}
 
-	export function addFiles(files: FileList | null) {
+	export function addFiles(files: FileList | File[] | null) {
 		handleFiles(files);
 	}
 

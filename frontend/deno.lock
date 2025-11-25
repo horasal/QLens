@@ -15,6 +15,8 @@
     "npm:@tailwindcss/forms@~0.5.10": "0.5.10_tailwindcss@4.1.17",
     "npm:@tailwindcss/typography@~0.5.19": "0.5.19_tailwindcss@4.1.17",
     "npm:@tailwindcss/vite@^4.1.14": "4.1.17_vite@7.2.2__@types+node@24.10.0__picomatch@4.0.3_@types+node@24.10.0",
+    "npm:@tauri-apps/api@^2.9.0": "2.9.0",
+    "npm:@tauri-apps/plugin-fs@^2.4.4": "2.4.4",
     "npm:@types/node@24": "24.10.0",
     "npm:@vscode/markdown-it-katex@^1.1.2": "1.1.2",
     "npm:daisyui@^5.4.7": "5.4.7",
@@ -864,6 +866,15 @@
         "@tailwindcss/oxide",
         "tailwindcss",
         "vite"
+      ]
+    },
+    "@tauri-apps/api@2.9.0": {
+      "integrity": "sha512-qD5tMjh7utwBk9/5PrTA/aGr3i5QaJ/Mlt7p8NilQ45WgbifUNPyKWsA63iQ8YfQq6R8ajMapU+/Q8nMcPRLNw=="
+    },
+    "@tauri-apps/plugin-fs@2.4.4": {
+      "integrity": "sha512-MTorXxIRmOnOPT1jZ3w96vjSuScER38ryXY88vl5F0uiKdnvTKKTtaEjTEo8uPbl4e3gnUtfsDVwC7h77GQLvQ==",
+      "dependencies": [
+        "@tauri-apps/api"
       ]
     },
     "@types/cookie@0.6.0": {
@@ -2245,6 +2256,8 @@
         "npm:@tailwindcss/forms@~0.5.10",
         "npm:@tailwindcss/typography@~0.5.19",
         "npm:@tailwindcss/vite@^4.1.14",
+        "npm:@tauri-apps/api@^2.9.0",
+        "npm:@tauri-apps/plugin-fs@^2.4.4",
         "npm:@types/node@24",
         "npm:@vscode/markdown-it-katex@^1.1.2",
         "npm:daisyui@^5.4.7",

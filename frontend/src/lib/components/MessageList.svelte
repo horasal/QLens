@@ -10,6 +10,7 @@
 	import { playgroundState } from '$lib/stores/artifactStore';
 	import { showArtifacts } from '$lib/stores/settingsStore';
 	import CollapsibleText from './CollapsibleText.svelte';
+	import { getApiBase } from '$lib/services/baseUrl';
 
 	const dispatch = createEventDispatcher();
 	let chatContainer: HTMLElement;
@@ -112,7 +113,7 @@
 	}
 	// --- 工具函数 (用于模板渲染) ---
 	function getImageUrl(item: MessageContent): string | null {
-		if ('ImageRef' in item) return `/api/image/${item.ImageRef[0]}`;
+		if ('ImageRef' in item) return `${getApiBase()}/api/image/${item.ImageRef[0]}`;
 		if ('ImageBin' in item) return `data:image/jpeg;base64,${item.ImageBin[0]}`;
 		return null;
 	}
@@ -350,7 +351,7 @@
 									{:else if 'AssetRef' in item}
 										{@const [uuid, desc] = item.AssetRef}
 										<a
-											href={`/api/asset/${uuid}`}
+											href={`${getApiBase()}/api/asset/${uuid}`}
 											target="_blank"
 											download={desc || `${uuid}` || 'download'}
 											class="flex h-24 w-24 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border border-base-300 bg-base-200 p-2 shadow-sm transition-colors hover:bg-base-300"
